@@ -32,7 +32,7 @@
           <select id="detailCapitalCity">
             <option value="">수도 미지정</option>
           </select>
-          <small class="field-note">현재 연도에 이 국가 영토 안에 있는 주요 도시만 선택할 수 있습니다.</small>
+          <small class="field-note">현재 연도 기준 이 국가 영토 안에 들어오는 실제 도시들 중에서 선택합니다.</small>
         </div>
         <div class="field">
           <label for="detailGovernment">정부 형태</label>
@@ -89,11 +89,23 @@
   function populateCapitalOptions(country) {
     const select = $('detailCapitalCity');
     select.innerHTML = '<option value="">수도 미지정</option>';
-    const cities = window.historyMapGeography?.citiesForCountry(country.id) || [];
+    const geo = window.historyMapGeography;
+    if (!geo?.ready) {
+      const loading = document.createElement('option');
+      loading.disabled = true;
+      loading.textContent = '도시 데이터 불러오는 중…';
+      select.appendChild(loading);
+      return;
+    }
+
+    const cities = geo.citiesForCountry(country.id) || [];
     cities.forEach(city => {
       const option = document.createElement('option');
       option.value = city.id;
-      option.textContent = city.name;
+      const population = Number(city.population || 0);
+      option.textContent = population >= 1000000
+        ? `${city.name} · 약 ${(population / 1000000).toFixed(1)}M`
+        : city.name;
       select.appendChild(option);
     });
     select.value = cities.some(c => c.id === country.capitalCityId) ? country.capitalCityId : '';
@@ -122,6 +134,12 @@
     dialog.close();
   }
 
+  window.addEventListener('historymap:geography-ready', () => {
+    if (!dialog.open || !editingCountryId) return;
+    const country = countryById(editingCountryId);
+    if (country) populateCapitalOptions(country);
+  });
+
   labelSize.addEventListener('input', () => {
     labelSizeValue.value = `${labelSize.value}px`;
   });
@@ -145,7 +163,7 @@
     country.shortName = $('detailShortName').value.trim();
     country.color = $('detailColor').value;
     country.capitalCityId = $('detailCapitalCity').value || '';
-    const capitalCity = state.cities?.find(c => c.id === country.capitalCityId);
+    const capitalCity = window.historyMapGeography?.cityById(country.capitalCityId);
     country.capital = capitalCity?.name || '';
     country.government = $('detailGovernment').value.trim();
     country.leader = $('detailLeader').value.trim();
