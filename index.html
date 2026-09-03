@@ -25,6 +25,7 @@
       <aside class="toolbar" aria-label="지도 도구">
         <button class="tool active" data-tool="pan" type="button"><span>✋</span><b>이동</b></button>
         <button class="tool" data-tool="border" type="button"><span>✏️</span><b>국경</b></button>
+        <button class="tool" data-tool="eraser" type="button"><span>🧽</span><b>지우개</b></button>
         <button class="tool" data-tool="fill" type="button"><span>🪣</span><b>영토</b></button>
         <button class="tool" data-tool="event" type="button"><span>📍</span><b>사건</b></button>
       </aside>
@@ -87,7 +88,7 @@
         <section class="panel help-panel">
           <h2>사용법</h2>
           <p id="toolHelp">이동 도구: 지도를 드래그하고 확대/축소할 수 있습니다.</p>
-          <p class="hint">국경 도구로 육지 위를 펜처럼 그은 뒤, 영토 도구에서 국가를 선택하고 원하는 영역을 눌러 채우세요.</p>
+          <p class="hint">국경은 펜으로 그리고, 잘못 그은 부분은 지우개로 문질러 부분 삭제할 수 있습니다. 영토 도구에서 국가를 선택하고 영역을 눌러 채우세요.</p>
           <button id="clearBordersBtn" type="button">현재 국경 전체 삭제</button>
         </section>
       </aside>
@@ -108,5 +109,6 @@
   <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
   <script src="app.js"></script>
+  <script src="eraser.js"></script>
 </body>
 </html>
