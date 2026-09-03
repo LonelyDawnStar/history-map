@@ -27,9 +27,12 @@
           <label for="detailColor">영토 색</label>
           <input id="detailColor" type="color" />
         </div>
-        <div class="field">
-          <label for="detailCapital">수도</label>
-          <input id="detailCapital" maxlength="80" placeholder="예: 한성" />
+        <div class="field wide">
+          <label for="detailCapitalCity">수도</label>
+          <select id="detailCapitalCity">
+            <option value="">수도 미지정</option>
+          </select>
+          <small class="field-note">현재 연도에 이 국가 영토 안에 있는 주요 도시만 선택할 수 있습니다.</small>
         </div>
         <div class="field">
           <label for="detailGovernment">정부 형태</label>
@@ -83,12 +86,25 @@
     return state.countries.find(c => c.id === id);
   }
 
+  function populateCapitalOptions(country) {
+    const select = $('detailCapitalCity');
+    select.innerHTML = '<option value="">수도 미지정</option>';
+    const cities = window.historyMapGeography?.citiesForCountry(country.id) || [];
+    cities.forEach(city => {
+      const option = document.createElement('option');
+      option.value = city.id;
+      option.textContent = city.name;
+      select.appendChild(option);
+    });
+    select.value = cities.some(c => c.id === country.capitalCityId) ? country.capitalCityId : '';
+  }
+
   function openDetails(country) {
     editingCountryId = country.id;
     $('detailName').value = country.name || '';
     $('detailShortName').value = country.shortName || '';
     $('detailColor').value = country.color || '#b94b52';
-    $('detailCapital').value = country.capital || '';
+    populateCapitalOptions(country);
     $('detailGovernment').value = country.government || '';
     $('detailLeader').value = country.leader || '';
     $('detailIdeology').value = country.ideology || '';
@@ -128,7 +144,9 @@
     country.name = name;
     country.shortName = $('detailShortName').value.trim();
     country.color = $('detailColor').value;
-    country.capital = $('detailCapital').value.trim();
+    country.capitalCityId = $('detailCapitalCity').value || '';
+    const capitalCity = state.cities?.find(c => c.id === country.capitalCityId);
+    country.capital = capitalCity?.name || '';
     country.government = $('detailGovernment').value.trim();
     country.leader = $('detailLeader').value.trim();
     country.ideology = $('detailIdeology').value.trim();
@@ -185,9 +203,9 @@
         .style('display', country.labelHidden ? 'none' : null)
         .attr('data-country-id', country.id);
     });
+    window.historyMapGeography?.render();
   };
 
-  // Re-render once so existing countries immediately get the new button.
   renderCountries();
   renderTerritories();
 })();
