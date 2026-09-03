@@ -6,13 +6,16 @@
 
   function serialize() {
     return JSON.stringify({
-      version: 1,
+      version: 2,
       savedAt: new Date().toISOString(),
       year: state.year,
       countries: state.countries,
       borders: state.borders,
       fills: state.fills,
       events: state.events,
+      cities: state.cities || [],
+      rivers: state.rivers || [],
+      mountains: state.mountains || [],
       activeCountryId: state.activeCountryId,
       view: {
         x: currentTransform.x,
@@ -49,6 +52,9 @@
       state.borders = Array.isArray(data.borders) ? data.borders : [];
       state.fills = Array.isArray(data.fills) ? data.fills : [];
       state.events = Array.isArray(data.events) ? data.events : [];
+      state.cities = Array.isArray(data.cities) ? data.cities : [];
+      state.rivers = Array.isArray(data.rivers) ? data.rivers : [];
+      state.mountains = Array.isArray(data.mountains) ? data.mountains : [];
       state.activeCountryId = data.activeCountryId || state.countries[0]?.id || null;
       state.year = Number(data.year ?? 1936);
       yearInput.value = state.year;
@@ -62,6 +68,7 @@
       }
 
       renderAll();
+      window.historyMapGeography?.render();
       lastSaved = serialize();
       return true;
     } catch (err) {
@@ -72,8 +79,6 @@
     }
   }
 
-  // State mutations are spread across several editor modules. Watching the
-  // serialized state keeps autosave reliable without coupling those modules.
   const observer = setInterval(() => {
     if (restoring) return;
     let raw;
@@ -86,8 +91,6 @@
     if (document.visibilityState === 'hidden') saveNow();
   });
 
-  // The base map loads asynchronously. Restore after the page scripts have
-  // initialized, then render again once the land mask is likely available.
   setTimeout(() => {
     const restored = restore();
     if (restored) setTimeout(() => renderAll(), 700);
