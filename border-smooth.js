@@ -95,7 +95,7 @@
       previous = sample;
 
       if (nearLand(sample[0], sample[1])) {
-        if (pendingGap.length && gapLength <= mapUnits(SHORT_GAP_SCREEN_PX)) {
+        if (pendingGap.length && gapLength <= mapUnits(SHORT_GAP_SCREEN_PX) && state.draftStroke.length) {
           pendingGap.forEach(pushPoint);
         } else if (gapLength > mapUnits(SHORT_GAP_SCREEN_PX) && state.draftStroke.length) {
           stashCurrentSegment();
@@ -105,8 +105,15 @@
         gapLength = 0;
         pushPoint(sample);
       } else {
-        pendingGap.push(sample);
-        gapLength += seg;
+        // Before the first land contact, simply track movement through the sea.
+        // Once a land stroke exists, short sea gaps may still be bridged as before.
+        if (state.draftStroke.length || finishedSegments.length) {
+          pendingGap.push(sample);
+          gapLength += seg;
+        } else {
+          pendingGap = [];
+          gapLength = 0;
+        }
       }
     }
 
@@ -117,8 +124,9 @@
     if (state.tool !== 'border') return;
     event.preventDefault();
     const point = mapPoint(event);
-    if (!nearLand(point[0], point[1])) return;
 
+    // Start tracking anywhere. If the stroke begins over the ocean,
+    // nothing is drawn until the pointer first enters land.
     state.drawing = true;
     resetStrokeBuffers();
     addRawPoint(point);
