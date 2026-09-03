@@ -1,0 +1,1 @@
+.country-label{pointer-events:auto;cursor:grab;touch-action:none}.country-label.dragging{cursor:grabbing}.hide-country-names .country-label{pointer-events:none}.country-details-grid #resetCountryLabelPosition{width:100%}
