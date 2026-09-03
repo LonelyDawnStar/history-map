@@ -17,20 +17,16 @@
       <div class="top-actions">
         <button id="undoBtn" type="button">실행 취소</button>
         <button id="exportBtn" type="button">JSON 저장</button>
-        <label class="file-button">
-          JSON 불러오기
-          <input id="importInput" type="file" accept="application/json,.json" />
-        </label>
+        <label class="file-button">JSON 불러오기<input id="importInput" type="file" accept="application/json,.json" /></label>
       </div>
     </header>
 
     <main class="workspace">
       <aside class="toolbar" aria-label="지도 도구">
         <button class="tool active" data-tool="pan" type="button"><span>✋</span><b>이동</b></button>
-        <button class="tool" data-tool="territory" type="button"><span>⬡</span><b>영토</b></button>
         <button class="tool" data-tool="border" type="button"><span>✏️</span><b>국경</b></button>
+        <button class="tool" data-tool="fill" type="button"><span>🪣</span><b>영토</b></button>
         <button class="tool" data-tool="event" type="button"><span>📍</span><b>사건</b></button>
-        <button class="tool" data-tool="select" type="button"><span>↖</span><b>선택</b></button>
       </aside>
 
       <section class="map-panel">
@@ -57,6 +53,7 @@
             <g id="baseLayer"></g>
             <g id="territoryLayer"></g>
             <g id="borderLayer"></g>
+            <g id="labelLayer"></g>
             <g id="eventLayer"></g>
             <g id="draftLayer"></g>
           </g>
@@ -81,14 +78,8 @@
 
         <section class="panel">
           <h2>국가</h2>
-          <div class="field">
-            <label for="countryName">국가명</label>
-            <input id="countryName" type="text" placeholder="예: 대한제국" />
-          </div>
-          <div class="field color-field">
-            <label for="countryColor">영토 색</label>
-            <input id="countryColor" type="color" value="#b94b52" />
-          </div>
+          <div class="field"><label for="countryName">국가명</label><input id="countryName" type="text" placeholder="예: 대한제국" /></div>
+          <div class="field color-field"><label for="countryColor">영토 색</label><input id="countryColor" type="color" value="#b94b52" /></div>
           <button id="addCountryBtn" class="primary" type="button">국가 추가</button>
           <div id="countryList" class="country-list"></div>
         </section>
@@ -96,9 +87,8 @@
         <section class="panel help-panel">
           <h2>사용법</h2>
           <p id="toolHelp">이동 도구: 지도를 드래그하고 확대/축소할 수 있습니다.</p>
-          <p class="hint">영토는 점을 차례로 찍고 첫 점을 다시 누르거나 ‘완료’를 누르면 생성됩니다.</p>
-          <button id="finishShapeBtn" type="button" disabled>현재 도형 완료</button>
-          <button id="cancelShapeBtn" type="button" disabled>취소</button>
+          <p class="hint">국경 도구로 육지 위를 펜처럼 그은 뒤, 영토 도구에서 국가를 선택하고 원하는 영역을 눌러 채우세요.</p>
+          <button id="clearBordersBtn" type="button">현재 국경 전체 삭제</button>
         </section>
       </aside>
     </main>
@@ -106,33 +96,11 @@
     <dialog id="eventDialog">
       <form method="dialog" id="eventForm">
         <h2>역사적 사건 추가</h2>
-        <div class="field">
-          <label for="eventTitle">사건명</label>
-          <input id="eventTitle" required placeholder="예: 왕조 교체" />
-        </div>
-        <div class="field">
-          <label for="eventDate">날짜</label>
-          <input id="eventDate" type="date" />
-        </div>
-        <div class="field">
-          <label for="eventType">분류</label>
-          <select id="eventType">
-            <option value="war">전쟁</option>
-            <option value="politics">정치</option>
-            <option value="diplomacy">외교</option>
-            <option value="foundation">건국</option>
-            <option value="collapse">멸망</option>
-            <option value="other">기타</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="eventDescription">설명</label>
-          <textarea id="eventDescription" rows="4" placeholder="사건 설명"></textarea>
-        </div>
-        <div class="dialog-actions">
-          <button value="cancel" type="button" id="cancelEventBtn">취소</button>
-          <button value="default" class="primary" type="submit">추가</button>
-        </div>
+        <div class="field"><label for="eventTitle">사건명</label><input id="eventTitle" required placeholder="예: 왕조 교체" /></div>
+        <div class="field"><label for="eventDate">날짜</label><input id="eventDate" type="date" /></div>
+        <div class="field"><label for="eventType">분류</label><select id="eventType"><option value="war">전쟁</option><option value="politics">정치</option><option value="diplomacy">외교</option><option value="foundation">건국</option><option value="collapse">멸망</option><option value="other">기타</option></select></div>
+        <div class="field"><label for="eventDescription">설명</label><textarea id="eventDescription" rows="4" placeholder="사건 설명"></textarea></div>
+        <div class="dialog-actions"><button value="cancel" type="button" id="cancelEventBtn">취소</button><button value="default" class="primary" type="submit">추가</button></div>
       </form>
     </dialog>
   </div>
