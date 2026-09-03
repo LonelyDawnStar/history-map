@@ -6,6 +6,7 @@
   let lastRawPoint = null;
   let pendingGap = [];
   let gapLength = 0;
+  let finishedSegments = [];
 
   function mapUnits(screenPx) {
     return screenPx / Math.max(0.7, currentTransform.k);
@@ -44,20 +45,39 @@
     return out;
   }
 
-  function commitStroke() {
+  function stashCurrentSegment() {
     if (state.draftStroke.length > 1) {
-      snapshot();
+      finishedSegments.push(state.draftStroke.map(p => [p[0], p[1]]));
+    }
+    state.draftStroke = [];
+  }
+
+  function resetStrokeBuffers() {
+    state.draftStroke = [];
+    finishedSegments = [];
+    pendingGap = [];
+    gapLength = 0;
+    lastRawPoint = null;
+  }
+
+  function commitAllSegments() {
+    stashCurrentSegment();
+    if (!finishedSegments.length) {
+      resetStrokeBuffers();
+      return false;
+    }
+
+    snapshot();
+    for (const segment of finishedSegments) {
       state.borders.push({
         id: uid(),
-        points: state.draftStroke.map(p => [+p[0].toFixed(2), +p[1].toFixed(2)]),
+        points: segment.map(p => [+p[0].toFixed(2), +p[1].toFixed(2)]),
         fromYear: state.year,
         toYear: 9999
       });
     }
-    state.draftStroke = [];
-    pendingGap = [];
-    gapLength = 0;
-    lastRawPoint = null;
+    resetStrokeBuffers();
+    return true;
   }
 
   function addRawPoint(point) {
@@ -77,20 +97,16 @@
       if (nearLand(sample[0], sample[1])) {
         if (pendingGap.length && gapLength <= mapUnits(SHORT_GAP_SCREEN_PX)) {
           pendingGap.forEach(pushPoint);
+        } else if (gapLength > mapUnits(SHORT_GAP_SCREEN_PX) && state.draftStroke.length) {
+          stashCurrentSegment();
         }
+
         pendingGap = [];
         gapLength = 0;
         pushPoint(sample);
       } else {
         pendingGap.push(sample);
         gapLength += seg;
-
-        if (gapLength > mapUnits(SHORT_GAP_SCREEN_PX)) {
-          pendingGap = [];
-          gapLength = 0;
-          if (state.draftStroke.length > 1) commitStroke();
-          else state.draftStroke = [];
-        }
       }
     }
 
@@ -104,10 +120,7 @@
     if (!nearLand(point[0], point[1])) return;
 
     state.drawing = true;
-    state.draftStroke = [];
-    pendingGap = [];
-    gapLength = 0;
-    lastRawPoint = null;
+    resetStrokeBuffers();
     addRawPoint(point);
     svg.node().setPointerCapture?.(event.pointerId);
     renderDraft();
@@ -123,25 +136,32 @@
   function finishSmoothStroke() {
     if (state.tool !== 'border' || !state.drawing) return;
     state.drawing = false;
-    commitStroke();
-    renderAll();
+    const changed = commitAllSegments();
+    draftLayer.selectAll('*').remove();
+    if (changed) {
+      renderBorders();
+      renderTerritories();
+    }
   }
 
   svg.on('pointerup.editor', finishSmoothStroke);
   svg.on('pointercancel.editor', finishSmoothStroke);
 
-  const oldRenderDraft = renderDraft;
   renderDraft = function () {
     draftLayer.selectAll('*').remove();
-    if (state.draftStroke.length > 1) {
-      const line = d3.line()
-        .x(d => d[0])
-        .y(d => d[1])
-        .curve(d3.curveCatmullRom.alpha(0.45));
-      draftLayer.append('path')
-        .attr('class', 'draft-line freehand')
-        .attr('d', line(state.draftStroke));
-    }
+    const line = d3.line()
+      .x(d => d[0])
+      .y(d => d[1])
+      .curve(d3.curveCatmullRom.alpha(0.45));
+
+    const segments = [...finishedSegments];
+    if (state.draftStroke.length > 1) segments.push(state.draftStroke);
+
+    draftLayer.selectAll('path.draft-line')
+      .data(segments)
+      .join('path')
+      .attr('class', 'draft-line freehand')
+      .attr('d', d => line(d));
   };
 
   renderBorders = function () {
