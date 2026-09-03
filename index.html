@@ -85,11 +85,12 @@
 
         <section class="panel geography-panel">
           <h2>기본 지리</h2>
-          <label class="layer-toggle"><input id="showNames" type="checkbox" checked /><span>이름 표시</span></label>
+          <label class="layer-toggle"><input id="showNames" type="checkbox" checked /><span>지명 표시</span></label>
+          <label class="layer-toggle"><input id="showCountryNames" type="checkbox" checked /><span>국가 이름 표시</span></label>
           <label class="layer-toggle"><input id="showCities" type="checkbox" checked /><span>주요 도시</span></label>
           <label class="layer-toggle"><input id="showRivers" type="checkbox" checked /><span>강</span></label>
           <label class="layer-toggle"><input id="showMountains" type="checkbox" checked /><span>산지·산맥</span></label>
-          <p class="hint">이름 표시를 끄면 도시 점·강·산지 표시는 남고 지명 텍스트만 숨겨집니다.</p>
+          <p class="hint">지명과 국가 이름을 각각 따로 켜고 끌 수 있습니다.</p>
         </section>
 
         <section class="panel help-panel">
@@ -124,6 +125,7 @@
   <script src="geography.js"></script>
   <script src="custom-cities.js"></script>
   <script src="country-details.js"></script>
+  <script src="country-name-toggle.js"></script>
   <script src="autosave.js"></script>
 </body>
 </html>
