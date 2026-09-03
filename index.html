@@ -27,6 +27,7 @@
         <button class="tool" data-tool="border" type="button"><span>✏️</span><b>국경</b></button>
         <button class="tool" data-tool="eraser" type="button"><span>🧽</span><b>지우개</b></button>
         <button class="tool" data-tool="fill" type="button"><span>🪣</span><b>영토</b></button>
+        <button class="tool" data-tool="city" type="button"><span>🏙️</span><b>도시</b></button>
         <button class="tool" data-tool="event" type="button"><span>📍</span><b>사건</b></button>
       </aside>
 
@@ -43,11 +44,6 @@
               <stop offset="0.55" stop-color="#c7c3a7" />
               <stop offset="1" stop-color="#aaa78d" />
             </linearGradient>
-            <filter id="terrainNoise" x="-10%" y="-10%" width="120%" height="120%">
-              <feTurbulence type="fractalNoise" baseFrequency="0.012 0.035" numOctaves="3" seed="7" result="noise" />
-              <feColorMatrix in="noise" type="saturate" values="0" result="grayNoise" />
-              <feBlend in="SourceGraphic" in2="grayNoise" mode="soft-light" />
-            </filter>
           </defs>
           <rect width="1200" height="620" fill="url(#oceanGradient)" />
           <g id="viewport">
@@ -91,13 +87,14 @@
           <label class="layer-toggle"><input id="showCities" type="checkbox" checked /><span>주요 도시</span></label>
           <label class="layer-toggle"><input id="showRivers" type="checkbox" checked /><span>강</span></label>
           <label class="layer-toggle"><input id="showMountains" type="checkbox" checked /><span>산지·산맥</span></label>
-          <p class="hint">실제 세계 지리 데이터를 표시합니다. 확대할수록 더 많은 도시와 지명이 나타납니다.</p>
+          <p class="hint">기본 도시는 세계적인 주요 도시만 고정 표시됩니다. 확대해도 기본 도시가 추가로 나타나지 않습니다.</p>
         </section>
 
         <section class="panel help-panel">
           <h2>사용법</h2>
           <p id="toolHelp">이동 도구: 지도를 드래그하고 확대/축소할 수 있습니다.</p>
-          <p class="hint">도시·강·산지는 기본 지도에 실제 지리 데이터로 표시됩니다. 수도는 국가 상세설정에서 현재 영토 안의 도시 중 선택합니다.</p>
+          <p class="hint">도시 도구로 육지를 누르면 새 도시를 추가합니다. 직접 추가한 도시를 도시 도구로 다시 누르면 삭제할 수 있습니다.</p>
+          <p class="hint">수도는 국가 상세설정에서 현재 영토 안의 기본 주요도시 또는 직접 추가한 도시 중 선택합니다.</p>
           <p class="hint">한 손가락/펜은 선택한 도구를 사용하고, 어느 도구에서든 두 손가락으로 드래그하면 이동·핀치하면 확대축소할 수 있습니다.</p>
           <button id="clearBordersBtn" type="button">현재 국경 전체 삭제</button>
         </section>
@@ -123,6 +120,7 @@
   <script src="eraser.js"></script>
   <script src="gesture.js"></script>
   <script src="geography.js"></script>
+  <script src="custom-cities.js"></script>
   <script src="country-details.js"></script>
   <script src="autosave.js"></script>
 </body>
