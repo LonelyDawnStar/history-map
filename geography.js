@@ -42,7 +42,6 @@
     let value = owner[iy * W + ix];
     if (value >= 0) return value;
 
-    // City coordinates can land a pixel or two outside a simplified coastline.
     for (let r = 1; r <= 4; r++) {
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
@@ -80,26 +79,58 @@
 
   function zoomTier() {
     const k = Math.max(0.7, currentTransform.k || 1);
-    if (k < 1.35) return 0;
-    if (k < 2.5) return 1;
-    if (k < 5) return 2;
+    if (k < 1.45) return 0;
+    if (k < 2.8) return 1;
+    if (k < 5.5) return 2;
     return 3;
   }
 
-  function cityRankLimit(tier) {
-    return [2, 4, 6, 10][tier];
-  }
-
   function riverRankLimit(tier) {
-    return [3, 5, 6, 10][tier];
+    return [2, 3, 5, 8][tier];
   }
 
   function regionRankLimit(tier) {
-    return [2, 4, 5, 10][tier];
+    return [1, 2, 4, 7][tier];
   }
 
   function displayName(props) {
     return props?.name_ko || props?.name_en || props?.name || props?.label || '';
+  }
+
+  function cityPriority(city) {
+    let score = Math.log10(Math.max(1, city.population || 0)) * 10;
+    if (city.isNationalCapital) score += 16;
+    if (city.worldCity) score += 8;
+    score -= city.scalerank * 2;
+    return score;
+  }
+
+  function cityPassesTier(city, tier) {
+    const pop = city.population || 0;
+    if (tier === 0) {
+      return city.scalerank <= 1 && pop >= 2500000;
+    }
+    if (tier === 1) {
+      return (city.scalerank <= 3 && pop >= 700000) || (city.isNationalCapital && pop >= 350000);
+    }
+    if (tier === 2) {
+      return city.scalerank <= 6 && (pop >= 100000 || city.isNationalCapital || city.worldCity);
+    }
+    return city.scalerank <= 10;
+  }
+
+  function declutterCities(cities, tier) {
+    const k = Math.max(0.7, currentTransform.k || 1);
+    const minScreenDistance = [72, 50, 34, 22][tier];
+    const minMapDistance = minScreenDistance / k;
+    const selected = [];
+
+    const sorted = [...cities].sort((a, b) => cityPriority(b) - cityPriority(a));
+    for (const city of sorted) {
+      const tooClose = selected.some(other => Math.hypot(city.x - other.x, city.y - other.y) < minMapDistance);
+      if (!tooClose) selected.push(city);
+    }
+    return selected;
   }
 
   function renderGeography() {
@@ -117,7 +148,9 @@
         .attr('class', 'reference-river')
         .attr('d', geoPath);
 
-      const labeledRivers = rivers.filter(f => displayName(f.properties) && Number(f.properties?.scalerank ?? 99) <= Math.max(3, riverRankLimit(tier) - 1));
+      const labeledRivers = tier === 0 ? [] : rivers.filter(f =>
+        displayName(f.properties) && Number(f.properties?.scalerank ?? 99) <= Math.max(2, riverRankLimit(tier) - 2)
+      );
       geographyLayer.selectAll('text.reference-river-label')
         .data(labeledRivers, d => d.properties?.ne_id || `${d.properties?.name}-label`)
         .join('text')
@@ -141,14 +174,14 @@
         const p = projection(d.geometry.coordinates);
         return `translate(${p?.[0] ?? -999},${p?.[1] ?? -999})`;
       });
-      groups.select('.reference-mountain-label').text(d => displayName(d.properties));
+      groups.select('.reference-mountain-label')
+        .style('display', tier === 0 ? 'none' : null)
+        .text(d => displayName(d.properties));
     }
 
     if (showCities?.checked !== false) {
-      const rankLimit = cityRankLimit(tier);
-      const cities = referenceCities.filter(city =>
-        city.scalerank <= rankLimit || city.isNationalCapital || city.worldCity
-      );
+      const candidates = referenceCities.filter(city => cityPassesTier(city, tier));
+      const cities = declutterCities(candidates, tier);
       const groups = geographyLayer.selectAll('g.reference-city')
         .data(cities, d => d.id)
         .join(enter => {
@@ -165,7 +198,7 @@
         const isCapital = !!ownerCountry && ownerCountry.capitalCityId === city.id;
         const g = d3.select(this);
         g.classed('capital-city', isCapital);
-        g.select('.reference-city-dot').attr('r', isCapital ? 4.1 : (city.isNationalCapital ? 3.2 : 2.8));
+        g.select('.reference-city-dot').attr('r', isCapital ? 4.1 : (city.isNationalCapital ? 3.1 : 2.5));
         g.select('.reference-city-label').text(`${isCapital ? '★ ' : ''}${city.name}`);
       });
     }
