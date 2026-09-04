@@ -229,7 +229,6 @@
     },
     getCentroid(countryId) { return buildOwner().centroids.get(countryId) || null; },
     getComponents(countryId) { return buildOwner().components.get(countryId) || []; },
-    getOwnerMap() { return buildOwner().owner; },
     render: renderTerritoriesCached
   };
 })();
