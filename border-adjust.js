@@ -19,18 +19,13 @@
   function addPoint(point) {
     if (!nearLand(point[0], point[1])) return;
     const last = stroke.at(-1);
-    if (!last || Math.hypot(point[0] - last[0], point[1] - last[1]) >= sampleGap()) {
-      stroke.push(point);
-    }
+    if (!last || Math.hypot(point[0] - last[0], point[1] - last[1]) >= sampleGap()) stroke.push(point);
   }
 
   function drawPreview() {
     draftLayer.selectAll('.border-adjust-preview').remove();
     if (stroke.length < 2) return;
-    const line = d3.line()
-      .x(d => d[0])
-      .y(d => d[1])
-      .curve(d3.curveCatmullRom.alpha(0.45));
+    const line = d3.line().x(d => d[0]).y(d => d[1]).curve(d3.curveCatmullRom.alpha(0.45));
     draftLayer.append('path')
       .attr('class', 'border-adjust-preview')
       .attr('d', line(stroke))
@@ -44,11 +39,9 @@
   }
 
   function closestIndex(points, target) {
-    let bestIndex = -1;
-    let bestSq = Infinity;
+    let bestIndex = -1, bestSq = Infinity;
     for (let i = 0; i < points.length; i++) {
-      const dx = points[i][0] - target[0];
-      const dy = points[i][1] - target[1];
+      const dx = points[i][0] - target[0], dy = points[i][1] - target[1];
       const sq = dx * dx + dy * dy;
       if (sq < bestSq) { bestSq = sq; bestIndex = i; }
     }
@@ -57,16 +50,12 @@
 
   function findTargetBorder() {
     if (stroke.length < 2) return null;
-    const start = stroke[0];
-    const end = stroke.at(-1);
-    const radius = snapRadius();
+    const start = stroke[0], end = stroke.at(-1), radius = snapRadius();
     let best = null;
-
     for (let i = 0; i < state.borders.length; i++) {
       const border = state.borders[i];
       if (!yearVisible(border) || !Array.isArray(border.points) || border.points.length < 4) continue;
-      const a = closestIndex(border.points, start);
-      const b = closestIndex(border.points, end);
+      const a = closestIndex(border.points, start), b = closestIndex(border.points, end);
       if (a.distance > radius || b.distance > radius || Math.abs(a.index - b.index) < 2) continue;
       const score = a.distance + b.distance;
       if (!best || score < best.score) best = { arrayIndex: i, border, startIndex: a.index, endIndex: b.index, score };
@@ -87,21 +76,23 @@
     const low = Math.min(target.startIndex, target.endIndex);
     const high = Math.max(target.startIndex, target.endIndex);
     const replacement = target.startIndex <= target.endIndex ? stroke : [...stroke].reverse();
-
     const merged = [
       ...points.slice(0, low + 1),
       ...replacement.slice(1, -1).map(p => [+p[0].toFixed(2), +p[1].toFixed(2)]),
       ...points.slice(high)
     ];
-
     if (merged.length < 2) return false;
+
+    const previousOwner = window.historyMapSplitPreserve?.captureOwner?.() || null;
     snapshot();
     state.borders[target.arrayIndex] = { ...target.border, points: merged };
-    window.historyMapTerritoryRender?.invalidate();
-    window.historyMapGeography?.invalidateOwnership();
+    window.historyMapSplitPreserve?.preserve?.(previousOwner);
+    window.historyMapTerritoryRender?.invalidate?.();
+    window.historyMapGeography?.invalidateOwnership?.();
     renderBorders();
     renderTerritories();
-    window.historyMapAutosave?.save();
+    window.historyMapGeography?.render?.();
+    window.historyMapAutosave?.save?.();
     return true;
   }
 
