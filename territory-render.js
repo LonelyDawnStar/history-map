@@ -3,11 +3,6 @@
   let cachedOwner = null;
   let cachedCentroids = null;
   let cachedComponents = null;
-  let cachedBorderHash = 0;
-  let cachedFillSignature = '';
-  let carryOwner = null;
-  let carryBorderHash = 0;
-  let carryFillSignature = '';
 
   function borderHash() {
     let hash = 2166136261 >>> 0;
@@ -29,21 +24,17 @@
     return hash >>> 0;
   }
 
-  function fillSignature() {
-    return `${state.year};${state.countries.map(c => c.id).join(',')};${state.fills.filter(yearVisible)
-      .map(f => `${f.id}:${f.countryId}:${f.x}:${f.y}`)
-      .join('|')}`;
-  }
-
   function ownershipKey() {
-    return `${fillSignature()};${borderHash()}`;
+    const fills = state.fills.filter(yearVisible)
+      .map(f => `${f.id}:${f.countryId}:${f.x}:${f.y}`)
+      .join('|');
+    return `${state.year};${state.countries.map(c => c.id).join(',')};${fills};${borderHash()}`;
   }
 
   function componentAnchor(indices, meanX, meanY) {
     let bestIdx = indices[0];
     let bestDist = Infinity;
-    const step = Math.max(1, Math.floor(indices.length / 1400));
-    for (let i = 0; i < indices.length; i += step) {
+    for (let i = 0; i < indices.length; i += Math.max(1, Math.floor(indices.length / 1400))) {
       const idx = indices[i];
       const x = idx % W;
       const y = (idx / W) | 0;
@@ -113,136 +104,21 @@
     return byCountry;
   }
 
-  // Preserve every piece of territory that existed immediately before a border edit.
-  // We inspect the OLD owner map through the NEW barriers and make sure each resulting
-  // connected piece has its own valid fill seed. This prevents a country from vanishing
-  // when a border-adjust stroke crosses its only seed or splits the mainland in two.
-  function ensureSeedsForPreviousTerritory(previousOwner, blocked, countryIndex) {
-    if (!previousOwner || previousOwner.length !== W * H) return 0;
-
-    const visited = new Uint8Array(W * H);
-    const queue = new Int32Array(W * H);
-    const componentMark = new Uint32Array(W * H);
-    let mark = 0;
-    const additions = [];
-    const visibleFills = state.fills.filter(yearVisible);
-
-    for (let start = 0; start < previousOwner.length; start++) {
-      const ci = previousOwner[start];
-      if (ci < 0 || blocked[start] || visited[start]) continue;
-
-      let head = 0, tail = 0, sx = 0, sy = 0;
-      queue[tail++] = start;
-      visited[start] = 1;
-      mark++;
-
-      while (head < tail) {
-        const idx = queue[head++];
-        componentMark[idx] = mark;
-        const x = idx % W, y = (idx / W) | 0;
-        sx += x; sy += y;
-
-        if (x > 0) {
-          const n = idx - 1;
-          if (!visited[n] && !blocked[n] && previousOwner[n] === ci) { visited[n] = 1; queue[tail++] = n; }
-        }
-        if (x < W - 1) {
-          const n = idx + 1;
-          if (!visited[n] && !blocked[n] && previousOwner[n] === ci) { visited[n] = 1; queue[tail++] = n; }
-        }
-        if (y > 0) {
-          const n = idx - W;
-          if (!visited[n] && !blocked[n] && previousOwner[n] === ci) { visited[n] = 1; queue[tail++] = n; }
-        }
-        if (y < H - 1) {
-          const n = idx + W;
-          if (!visited[n] && !blocked[n] && previousOwner[n] === ci) { visited[n] = 1; queue[tail++] = n; }
-        }
-      }
-
-      const country = state.countries[ci];
-      if (!country || !countryIndex.has(country.id) || tail === 0) continue;
-
-      // A raw seed must actually lie inside this old territory piece. A seed sitting
-      // on the new border does not count; safe-flood may otherwise jump to one side.
-      let hasValidSeed = false;
-      for (const fill of visibleFills) {
-        if (fill.countryId !== country.id) continue;
-        const fx = Math.round(fill.x), fy = Math.round(fill.y);
-        if (fx < 0 || fy < 0 || fx >= W || fy >= H) continue;
-        const fidx = fy * W + fx;
-        if (!blocked[fidx] && componentMark[fidx] === mark) {
-          hasValidSeed = true;
-          break;
-        }
-      }
-      if (hasValidSeed) continue;
-
-      const meanX = sx / tail, meanY = sy / tail;
-      let seedIdx = start, best = Infinity;
-      const step = Math.max(1, Math.floor(tail / 1000));
-      for (let i = 0; i < tail; i += step) {
-        const idx = queue[i];
-        const x = idx % W, y = (idx / W) | 0;
-        const d = (x - meanX) * (x - meanX) + (y - meanY) * (y - meanY);
-        if (d < best) { best = d; seedIdx = idx; }
-      }
-
-      additions.push({
-        id: uid(),
-        countryId: country.id,
-        x: seedIdx % W,
-        y: (seedIdx / W) | 0,
-        fromYear: state.year,
-        toYear: 9999,
-        autoSplit: true
-      });
-    }
-
-    if (additions.length) state.fills.push(...additions);
-    return additions.length;
-  }
-
   function buildOwner() {
-    const currentBorderHash = borderHash();
-    const currentFillSignature = fillSignature();
-    const key = `${currentFillSignature};${currentBorderHash}`;
+    const key = ownershipKey();
     if (key === cacheKey && cachedOwner && cachedCentroids && cachedComponents) {
       return { owner: cachedOwner, centroids: cachedCentroids, components: cachedComponents };
     }
 
-    const previousOwner = carryOwner || cachedOwner;
-    const previousBorderHash = carryOwner ? carryBorderHash : cachedBorderHash;
-    const previousFillSignature = carryOwner ? carryFillSignature : cachedFillSignature;
-    carryOwner = null;
-    carryBorderHash = 0;
-    carryFillSignature = '';
-
     const blocked = buildBarrierMap();
-    const countryIndex = new Map(state.countries.map((c, i) => [c.id, i]));
-    const borderChanged = !!previousOwner && previousFillSignature === currentFillSignature && previousBorderHash !== currentBorderHash;
-
-    // Before flooding, repair the seed set itself. Doing this first is important:
-    // rendering first and repairing afterwards lets a blocked seed migrate to the
-    // wrong side and can make the original country disappear for one render.
-    const addedSeeds = borderChanged
-      ? ensureSeedsForPreviousTerritory(previousOwner, blocked, countryIndex)
-      : 0;
-
     const owner = new Int32Array(W * H);
     owner.fill(-1);
+    const countryIndex = new Map(state.countries.map((c, i) => [c.id, i]));
 
     for (const fill of state.fills) {
       if (!yearVisible(fill)) continue;
       const ci = countryIndex.get(fill.countryId);
       if (ci === undefined) continue;
-
-      const fx = Math.round(fill.x), fy = Math.round(fill.y);
-      // During a border edit, never let an old seed sitting exactly on the new
-      // border use safe-flood's nearest-side fallback. The repaired seeds above
-      // already preserve all previous pieces deterministically.
-      if (borderChanged && fx >= 0 && fy >= 0 && fx < W && fy < H && blocked[fy * W + fx]) continue;
-
       const region = floodRegion(fill.x, fill.y, blocked);
       for (const idx of region) owner[idx] = ci;
     }
@@ -268,14 +144,10 @@
     });
 
     const components = buildComponents(owner);
-    cacheKey = ownershipKey();
+    cacheKey = key;
     cachedOwner = owner;
     cachedCentroids = centroids;
     cachedComponents = components;
-    cachedBorderHash = currentBorderHash;
-    cachedFillSignature = fillSignature();
-
-    if (addedSeeds) window.historyMapAutosave?.save?.();
     return { owner, centroids, components };
   }
 
@@ -350,11 +222,6 @@
 
   window.historyMapTerritoryRender = {
     invalidate() {
-      if (cachedOwner) {
-        carryOwner = cachedOwner.slice();
-        carryBorderHash = cachedBorderHash;
-        carryFillSignature = cachedFillSignature;
-      }
       cacheKey = '';
       cachedOwner = null;
       cachedCentroids = null;
