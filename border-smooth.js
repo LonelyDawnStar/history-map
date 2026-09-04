@@ -15,19 +15,13 @@
   function nearLand(x, y) {
     if (isLand(x, y)) return true;
     const r = mapUnits(LAND_TOLERANCE_SCREEN_PX);
-    const checks = [
-      [r, 0], [-r, 0], [0, r], [0, -r],
-      [r * .7, r * .7], [r * .7, -r * .7],
-      [-r * .7, r * .7], [-r * .7, -r * .7]
-    ];
+    const checks = [[r,0],[-r,0],[0,r],[0,-r],[r*.7,r*.7],[r*.7,-r*.7],[-r*.7,r*.7],[-r*.7,-r*.7]];
     return checks.some(([dx, dy]) => isLand(x + dx, y + dy));
   }
 
   function pushPoint(point) {
     const last = state.draftStroke.at(-1);
-    if (!last || Math.hypot(point[0] - last[0], point[1] - last[1]) >= mapUnits(MIN_SAMPLE_SCREEN_PX)) {
-      state.draftStroke.push(point);
-    }
+    if (!last || Math.hypot(point[0] - last[0], point[1] - last[1]) >= mapUnits(MIN_SAMPLE_SCREEN_PX)) state.draftStroke.push(point);
   }
 
   function samplesBetween(a, b) {
@@ -37,18 +31,13 @@
     const out = [];
     for (let i = 1; i <= count; i++) {
       const t = i / count;
-      out.push([
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t
-      ]);
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
     }
     return out;
   }
 
   function stashCurrentSegment() {
-    if (state.draftStroke.length > 1) {
-      finishedSegments.push(state.draftStroke.map(p => [p[0], p[1]]));
-    }
+    if (state.draftStroke.length > 1) finishedSegments.push(state.draftStroke.map(p => [p[0], p[1]]));
     state.draftStroke = [];
   }
 
@@ -67,6 +56,7 @@
       return false;
     }
 
+    const previousOwner = window.historyMapSplitPreserve?.captureOwner?.() || null;
     snapshot();
     for (const segment of finishedSegments) {
       state.borders.push({
@@ -76,6 +66,7 @@
         toYear: 9999
       });
     }
+    window.historyMapSplitPreserve?.preserve?.(previousOwner);
     resetStrokeBuffers();
     return true;
   }
@@ -89,47 +80,32 @@
 
     const interpolated = samplesBetween(lastRawPoint, point);
     let previous = lastRawPoint;
-
     for (const sample of interpolated) {
       const seg = Math.hypot(sample[0] - previous[0], sample[1] - previous[1]);
       previous = sample;
-
       if (nearLand(sample[0], sample[1])) {
-        if (pendingGap.length && gapLength <= mapUnits(SHORT_GAP_SCREEN_PX) && state.draftStroke.length) {
-          pendingGap.forEach(pushPoint);
-        } else if (gapLength > mapUnits(SHORT_GAP_SCREEN_PX) && state.draftStroke.length) {
-          stashCurrentSegment();
-        }
-
+        if (pendingGap.length && gapLength <= mapUnits(SHORT_GAP_SCREEN_PX) && state.draftStroke.length) pendingGap.forEach(pushPoint);
+        else if (gapLength > mapUnits(SHORT_GAP_SCREEN_PX) && state.draftStroke.length) stashCurrentSegment();
         pendingGap = [];
         gapLength = 0;
         pushPoint(sample);
+      } else if (state.draftStroke.length || finishedSegments.length) {
+        pendingGap.push(sample);
+        gapLength += seg;
       } else {
-        // Before the first land contact, simply track movement through the sea.
-        // Once a land stroke exists, short sea gaps may still be bridged as before.
-        if (state.draftStroke.length || finishedSegments.length) {
-          pendingGap.push(sample);
-          gapLength += seg;
-        } else {
-          pendingGap = [];
-          gapLength = 0;
-        }
+        pendingGap = [];
+        gapLength = 0;
       }
     }
-
     lastRawPoint = point;
   }
 
   svg.on('pointerdown.editor', event => {
     if (state.tool !== 'border') return;
     event.preventDefault();
-    const point = mapPoint(event);
-
-    // Start tracking anywhere. If the stroke begins over the ocean,
-    // nothing is drawn until the pointer first enters land.
     state.drawing = true;
     resetStrokeBuffers();
-    addRawPoint(point);
+    addRawPoint(mapPoint(event));
     svg.node().setPointerCapture?.(event.pointerId);
     renderDraft();
   });
@@ -147,8 +123,12 @@
     const changed = commitAllSegments();
     draftLayer.selectAll('*').remove();
     if (changed) {
+      window.historyMapTerritoryRender?.invalidate?.();
+      window.historyMapGeography?.invalidateOwnership?.();
       renderBorders();
       renderTerritories();
+      window.historyMapGeography?.render?.();
+      window.historyMapAutosave?.save?.();
     }
   }
 
@@ -157,32 +137,15 @@
 
   renderDraft = function () {
     draftLayer.selectAll('*').remove();
-    const line = d3.line()
-      .x(d => d[0])
-      .y(d => d[1])
-      .curve(d3.curveCatmullRom.alpha(0.45));
-
+    const line = d3.line().x(d => d[0]).y(d => d[1]).curve(d3.curveCatmullRom.alpha(0.45));
     const segments = [...finishedSegments];
     if (state.draftStroke.length > 1) segments.push(state.draftStroke);
-
-    draftLayer.selectAll('path.draft-line')
-      .data(segments)
-      .join('path')
-      .attr('class', 'draft-line freehand')
-      .attr('d', d => line(d));
+    draftLayer.selectAll('path.draft-line').data(segments).join('path').attr('class', 'draft-line freehand').attr('d', d => line(d));
   };
 
   renderBorders = function () {
-    const line = d3.line()
-      .x(d => d[0])
-      .y(d => d[1])
-      .curve(d3.curveCatmullRom.alpha(0.45));
-
+    const line = d3.line().x(d => d[0]).y(d => d[1]).curve(d3.curveCatmullRom.alpha(0.45));
     borderLayer.selectAll('polyline').remove();
-    borderLayer.selectAll('path.border-line')
-      .data(state.borders.filter(yearVisible), d => d.id)
-      .join('path')
-      .attr('class', 'border-line')
-      .attr('d', d => line(d.points));
+    borderLayer.selectAll('path.border-line').data(state.borders.filter(yearVisible), d => d.id).join('path').attr('class', 'border-line').attr('d', d => line(d.points));
   };
 })();
