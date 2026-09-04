@@ -6,6 +6,10 @@
     return state.countries.find(country => country.id === id) || null;
   }
 
+  function componentKeyForLabel(label) {
+    return label.getAttribute('data-component-key') || '0';
+  }
+
   function applyPosition(label, country, x, y) {
     label.setAttribute('x', x);
     label.setAttribute('y', y);
@@ -29,6 +33,7 @@
       pointerId: event.pointerId,
       label,
       country,
+      componentKey: componentKeyForLabel(label),
       offsetX: lx - x,
       offsetY: ly - y,
       moved: false
@@ -43,8 +48,12 @@
     const [x, y] = mapPoint(event);
     const nx = +(x + drag.offsetX).toFixed(2);
     const ny = +(y + drag.offsetY).toFixed(2);
-    drag.country.labelX = nx;
-    drag.country.labelY = ny;
+    drag.country.labelPositions = drag.country.labelPositions || {};
+    drag.country.labelPositions[drag.componentKey] = { x: nx, y: ny };
+    if (drag.componentKey === '0') {
+      drag.country.labelX = nx;
+      drag.country.labelY = ny;
+    }
     drag.moved = true;
     applyPosition(drag.label, drag.country, nx, ny);
   }, true);
@@ -71,6 +80,7 @@
       if (!country) return;
       delete country.labelX;
       delete country.labelY;
+      delete country.labelPositions;
       renderTerritories();
     }
   };
