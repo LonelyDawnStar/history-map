@@ -6,7 +6,8 @@
   let changedThisGesture = false;
 
   function brushRadius() {
-    return Math.max(4, 16 / Math.max(0.7, currentTransform.k));
+    const size = Number(window.historyMapToolSettings?.eraserSize) || 32;
+    return Math.max(2, size / 2 / Math.max(0.7, currentTransform.k));
   }
 
   function showBrush(x, y) {
@@ -19,14 +20,11 @@
       .attr('r', brushRadius());
   }
 
-  function distance(a, b) {
-    return Math.hypot(a[0] - b[0], a[1] - b[1]);
-  }
-
   function eraseAt(x, y) {
     const radius = brushRadius();
+    const radiusSq = radius * radius;
     const nextBorders = [];
-    let changed = false;
+    let anyChanged = false;
 
     for (const border of state.borders) {
       if (!yearVisible(border) || !Array.isArray(border.points) || border.points.length < 2) {
@@ -36,11 +34,14 @@
 
       const runs = [];
       let run = [];
+      let borderChanged = false;
 
       for (const point of border.points) {
-        const hit = distance(point, [x, y]) <= radius;
+        const dx = point[0] - x;
+        const dy = point[1] - y;
+        const hit = dx * dx + dy * dy <= radiusSq;
         if (hit) {
-          changed = true;
+          borderChanged = true;
           if (run.length >= 2) runs.push(run);
           run = [];
         } else {
@@ -49,39 +50,36 @@
       }
       if (run.length >= 2) runs.push(run);
 
-      if (!changed || runs.length === 1 && runs[0].length === border.points.length) {
+      if (!borderChanged) {
         nextBorders.push(border);
         continue;
       }
 
+      anyChanged = true;
       for (const points of runs) {
         if (points.length < 2) continue;
-        nextBorders.push({
-          ...border,
-          id: uid(),
-          points: points.map(p => [p[0], p[1]])
-        });
+        nextBorders.push({ ...border, id: uid(), points: points.map(p => [p[0], p[1]]) });
       }
     }
 
-    if (changed) {
-      state.borders = nextBorders;
-      changedThisGesture = true;
-      renderAll();
-      showBrush(x, y);
-    }
+    if (!anyChanged) return;
+    state.borders = nextBorders;
+    changedThisGesture = true;
+    window.historyMapTerritoryRender?.invalidate();
+    window.historyMapGeography?.invalidateOwnership();
+    renderBorders();
   }
 
   eraserButton.addEventListener('click', () => {
-    helpEl.textContent = '국경 지우개: 잘못 그은 국경 위를 손가락이나 펜으로 문지르면 닿은 부분만 삭제됩니다.';
+    helpEl.textContent = '국경 지우개: 도구 설정에서 크기를 바꾼 뒤 국경 위를 문지르면 닿은 부분만 삭제됩니다.';
     svg.style('cursor', 'crosshair');
+    window.historyMapToolSettings?.showForTool?.('eraser');
   });
 
   svg.on('pointerdown.eraser', event => {
     if (state.tool !== 'eraser') return;
     event.preventDefault();
     const [x, y] = mapPoint(event);
-    if (!isLand(x, y)) return;
     snapshot();
     erasing = true;
     changedThisGesture = false;
@@ -96,17 +94,21 @@
     showBrush(x, y);
     if (!erasing) return;
     event.preventDefault();
-    if (!isLand(x, y)) return;
     eraseAt(x, y);
   });
 
-  function finishErase() {
+  function finishErase(event) {
     if (!erasing) return;
     erasing = false;
     draftLayer.selectAll('.eraser-brush').remove();
-    if (!changedThisGesture) state.history.pop();
+    try { svg.node().releasePointerCapture?.(event?.pointerId); } catch {}
+    if (!changedThisGesture) {
+      state.history.pop();
+      return;
+    }
     renderTerritories();
     renderBorders();
+    window.historyMapAutosave?.save();
   }
 
   svg.on('pointerup.eraser', finishErase);
