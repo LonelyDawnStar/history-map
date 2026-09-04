@@ -72,14 +72,9 @@
     if (cx < 0 || cy < 0 || cx >= W || cy >= H) return -1;
     const direct = owner[cy * W + cx];
     if (direct >= 0) return direct;
-
-    // The border itself is blocked, so allow only a tiny tolerance around it.
-    // If equally-near pixels belong to different countries the start side is
-    // ambiguous; force the user to begin slightly inside the intended country.
     const maxR = Math.max(2, Math.ceil(screenToMap(4)));
     for (let r = 1; r <= maxR; r++) {
-      let found = -1;
-      let ambiguous = false;
+      let found = -1, ambiguous = false;
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
@@ -105,47 +100,75 @@
 
   function buildCandidateBarrier(targetIndex, mergedPoints) {
     const blocked = new Uint8Array(W * H);
-    if (landMask) {
-      for (let i = 0; i < W * H; i++) if (landMask[i * 4 + 3] === 0) blocked[i] = 1;
-    }
-
+    if (landMask) for (let i = 0; i < W * H; i++) if (landMask[i * 4 + 3] === 0) blocked[i] = 1;
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 4;
-
     for (let i = 0; i < state.borders.length; i++) {
       const border = state.borders[i];
       if (!yearVisible(border)) continue;
       const points = i === targetIndex ? mergedPoints : border.points;
       if (!points?.length) continue;
-      ctx.beginPath();
-      ctx.moveTo(points[0][0], points[0][1]);
+      ctx.beginPath(); ctx.moveTo(points[0][0], points[0][1]);
       for (let p = 1; p < points.length; p++) ctx.lineTo(points[p][0], points[p][1]);
       ctx.stroke();
     }
-
     const data = ctx.getImageData(0, 0, W, H).data;
     for (let i = 0; i < W * H; i++) if (data[i * 4 + 3] > 0) blocked[i] = 1;
     return blocked;
   }
 
-  function candidateStartCountryArea(targetIndex, mergedPoints, startCi) {
+  function candidateOwnerMap(targetIndex, mergedPoints) {
     const blocked = buildCandidateBarrier(targetIndex, mergedPoints);
     const owner = new Int32Array(W * H);
     owner.fill(-1);
     const countryIndex = new Map(state.countries.map((country, i) => [country.id, i]));
-
-    // Preserve the exact same last-fill-wins ownership rule as the main renderer,
-    // but do it off-screen so invalid adjustments never mutate app state/history.
     for (const fill of state.fills) {
       if (!yearVisible(fill)) continue;
       const ci = countryIndex.get(fill.countryId);
       if (ci === undefined) continue;
-      const region = floodRegion(fill.x, fill.y, blocked);
-      for (const idx of region) owner[idx] = ci;
+      for (const idx of floodRegion(fill.x, fill.y, blocked)) owner[idx] = ci;
     }
-    return countOwner(owner, startCi);
+    return owner;
+  }
+
+  // The only pixels allowed to change ownership are those swept between the
+  // old border segment and the replacement stroke. This prevents one tiny edit
+  // from opening a flood-fill path and swallowing an entire distant country.
+  function buildSweptMask(oldSegment, replacement) {
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const polygon = [...oldSegment, ...[...replacement].reverse()];
+    if (polygon.length < 3) return new Uint8Array(W * H);
+    ctx.beginPath();
+    ctx.moveTo(polygon[0][0], polygon[0][1]);
+    for (let i = 1; i < polygon.length; i++) ctx.lineTo(polygon[i][0], polygon[i][1]);
+    ctx.closePath();
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    // Give the boundary a small tolerance for rasterization differences.
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 10;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    const data = ctx.getImageData(0, 0, W, H).data;
+    const mask = new Uint8Array(W * H);
+    for (let i = 0; i < mask.length; i++) if (data[i * 4 + 3] > 0) mask[i] = 1;
+    return mask;
+  }
+
+  function changesStayLocal(before, after, sweptMask) {
+    let changed = 0, outside = 0;
+    for (let i = 0; i < before.length; i++) {
+      if (before[i] === after[i]) continue;
+      changed++;
+      if (!sweptMask[i]) outside++;
+    }
+    // A few pixels can differ from anti-aliasing / 4px barrier rasterization,
+    // but a real topology leak changes hundreds or thousands outside the sweep.
+    return { changed, outside, safe: outside <= Math.max(20, Math.round(changed * 0.015)) };
   }
 
   function showStatus(message) {
@@ -156,34 +179,33 @@
 
   function commitAdjustment() {
     const target = findTargetBorder();
-    if (!target) {
-      showStatus('파란 선의 시작과 끝을 같은 기존 국경에 닿게 그려 주세요.');
-      return false;
-    }
-    if (!ownerBeforeStroke || !startCountryId) {
-      showStatus('국경선 바로 위가 아니라, 영토를 늘릴 나라 쪽에서 시작해 주세요.');
-      return false;
-    }
+    if (!target) { showStatus('파란 선의 시작과 끝을 같은 기존 국경에 닿게 그려 주세요.'); return false; }
+    if (!ownerBeforeStroke || !startCountryId) { showStatus('국경선 바로 위가 아니라, 영토를 늘릴 나라 쪽에서 시작해 주세요.'); return false; }
 
     const startCi = state.countries.findIndex(country => country.id === startCountryId);
     if (startCi < 0) return false;
-
     const points = target.border.points;
     const low = Math.min(target.startIndex, target.endIndex);
     const high = Math.max(target.startIndex, target.endIndex);
     const replacement = target.startIndex <= target.endIndex ? stroke : [...stroke].reverse();
-    const merged = [
-      ...points.slice(0, low + 1),
-      ...replacement.slice(1, -1).map(p => [+p[0].toFixed(2), +p[1].toFixed(2)]),
-      ...points.slice(high)
-    ];
+    const replacementClean = replacement.slice(1, -1).map(p => [+p[0].toFixed(2), +p[1].toFixed(2)]);
+    const merged = [...points.slice(0, low + 1), ...replacementClean, ...points.slice(high)];
     if (merged.length < 2) return false;
 
+    const oldSegment = points.slice(low, high + 1);
+    const sweptReplacement = [points[low], ...replacementClean, points[high]];
+    const candidateOwner = candidateOwnerMap(target.arrayIndex, merged);
     const beforeArea = countOwner(ownerBeforeStroke, startCi);
-    const afterArea = candidateStartCountryArea(target.arrayIndex, merged, startCi);
+    const afterArea = countOwner(candidateOwner, startCi);
     if (afterArea <= beforeArea) {
       const countryName = state.countries[startCi]?.name || '시작 국가';
       showStatus(`${countryName}의 영토가 늘어나는 방향으로 국경을 조정해 주세요.`);
+      return false;
+    }
+
+    const locality = changesStayLocal(ownerBeforeStroke, candidateOwner, buildSweptMask(oldSegment, sweptReplacement));
+    if (!locality.safe) {
+      showStatus('이 조정은 다른 지역의 영토까지 크게 바꿉니다. 더 짧은 구간으로 다시 그려 주세요.');
       return false;
     }
 
@@ -200,7 +222,7 @@
   }
 
   button.addEventListener('click', () => {
-    helpEl.textContent = '국경 조정: 영토를 늘릴 나라 쪽에서 시작해 파란 선을 그리고 같은 기존 국경에 다시 닿게 하세요. 시작한 나라의 영토가 늘어나는 조정만 적용됩니다.';
+    helpEl.textContent = '국경 조정: 영토를 늘릴 나라 쪽에서 시작해 파란 선을 그리고 같은 기존 국경에 다시 닿게 하세요. 실제 변경은 기존 국경과 새 선 사이의 영역에만 허용됩니다.';
     svg.style('cursor', 'crosshair');
     window.historyMapToolSettings?.showForTool?.('border-adjust');
   });
