@@ -26,9 +26,7 @@
   function addPoint(point) {
     if (!nearLand(point[0], point[1])) return;
     const last = stroke.at(-1);
-    if (!last || Math.hypot(point[0] - last[0], point[1] - last[1]) >= sampleGap()) {
-      stroke.push(point);
-    }
+    if (!last || Math.hypot(point[0] - last[0], point[1] - last[1]) >= sampleGap()) stroke.push(point);
   }
 
   function lineLength(points) {
@@ -40,10 +38,7 @@
   function drawPreview() {
     draftLayer.selectAll('.border-adjust-preview').remove();
     if (stroke.length < 2) return;
-    const line = d3.line()
-      .x(d => d[0])
-      .y(d => d[1])
-      .curve(d3.curveCatmullRom.alpha(0.45));
+    const line = d3.line().x(d => d[0]).y(d => d[1]).curve(d3.curveCatmullRom.alpha(0.45));
     draftLayer.append('path')
       .attr('class', 'border-adjust-preview')
       .attr('d', line(stroke))
@@ -92,9 +87,7 @@
 
   function findTargetBorder() {
     if (stroke.length < 2) return null;
-    const start = stroke[0];
-    const end = stroke.at(-1);
-    const radius = snapRadius();
+    const start = stroke[0], end = stroke.at(-1), radius = snapRadius();
     const newLength = Math.max(1, lineLength(stroke));
     let best = null;
 
@@ -104,15 +97,11 @@
       const a = closestProjection(border.points, start);
       const b = closestProjection(border.points, end);
       if (!a || !b || a.distance > radius || b.distance > radius) continue;
-
-      const aPos = a.segmentIndex + a.t;
-      const bPos = b.segmentIndex + b.t;
+      const aPos = a.segmentIndex + a.t, bPos = b.segmentIndex + b.t;
       if (Math.abs(aPos - bPos) < 0.15) continue;
-
       const oldLength = pathLengthBetween(border.points, a, b);
       const ratio = oldLength / newLength;
       if (ratio > 3.25 || ratio < 0.22) continue;
-
       const lengthPenalty = Math.abs(Math.log(Math.max(0.05, ratio))) * radius * 0.8;
       const score = a.distance + b.distance + lengthPenalty;
       if (!best || score < best.score) best = { arrayIndex: i, border, start: a, end: b, score };
@@ -120,26 +109,18 @@
     return best;
   }
 
-  // Build connected-component IDs for the NEW barrier only once. We then check
-  // where each country's OLD pixels ended up. If two different countries now
-  // have the same dominant connected component, the adjusted border has opened
-  // a leak and flood-fill would let one country overwrite the other.
-  function mergedCountriesAfterEdit(previousOwner) {
-    if (!previousOwner || previousOwner.length !== W * H) return false;
-    const blocked = buildBarrierMap();
+  function buildOpenComponents(blocked) {
     const component = new Int32Array(W * H);
     component.fill(-1);
     const queue = new Int32Array(W * H);
     let componentId = 0;
-
     for (let start = 0; start < component.length; start++) {
       if (blocked[start] || component[start] !== -1) continue;
       let head = 0, tail = 0;
       queue[tail++] = start;
       component[start] = componentId;
       while (head < tail) {
-        const idx = queue[head++];
-        const x = idx % W, y = (idx / W) | 0;
+        const idx = queue[head++], x = idx % W, y = (idx / W) | 0;
         if (x > 0) { const n = idx - 1; if (!blocked[n] && component[n] === -1) { component[n] = componentId; queue[tail++] = n; } }
         if (x < W - 1) { const n = idx + 1; if (!blocked[n] && component[n] === -1) { component[n] = componentId; queue[tail++] = n; } }
         if (y > 0) { const n = idx - W; if (!blocked[n] && component[n] === -1) { component[n] = componentId; queue[tail++] = n; } }
@@ -147,32 +128,139 @@
       }
       componentId++;
     }
+    return component;
+  }
 
+  function mergedCountriesAfterEdit(previousOwner, component) {
+    if (!previousOwner || previousOwner.length !== W * H) return false;
     const counts = state.countries.map(() => new Map());
     const totals = new Int32Array(state.countries.length);
     for (let idx = 0; idx < previousOwner.length; idx++) {
-      const ci = previousOwner[idx];
-      const comp = component[idx];
+      const ci = previousOwner[idx], comp = component[idx];
       if (ci < 0 || comp < 0 || ci >= counts.length) continue;
       totals[ci]++;
       counts[ci].set(comp, (counts[ci].get(comp) || 0) + 1);
     }
-
     const dominant = new Map();
     for (let ci = 0; ci < counts.length; ci++) {
       if (totals[ci] < 80) continue;
       let bestComp = -1, bestCount = 0;
-      for (const [comp, count] of counts[ci]) {
-        if (count > bestCount) { bestCount = count; bestComp = comp; }
-      }
-      if (bestComp < 0) continue;
-      // Ignore tiny remnants produced by coastline/border rasterization.
-      if (bestCount < Math.max(60, totals[ci] * 0.12)) continue;
+      for (const [comp, count] of counts[ci]) if (count > bestCount) { bestCount = count; bestComp = comp; }
+      if (bestComp < 0 || bestCount < Math.max(60, totals[ci] * 0.12)) continue;
       const other = dominant.get(bestComp);
       if (other !== undefined && other !== ci) return true;
       dominant.set(bestComp, ci);
     }
     return false;
+  }
+
+  function buildOldOwnerComponents(previousOwner) {
+    const labels = new Int32Array(W * H);
+    labels.fill(-1);
+    const queue = new Int32Array(W * H);
+    let label = 0;
+    for (let start = 0; start < previousOwner.length; start++) {
+      const ci = previousOwner[start];
+      if (ci < 0 || labels[start] !== -1) continue;
+      let head = 0, tail = 0;
+      queue[tail++] = start;
+      labels[start] = label;
+      while (head < tail) {
+        const idx = queue[head++], x = idx % W, y = (idx / W) | 0;
+        if (x > 0) { const n = idx - 1; if (labels[n] === -1 && previousOwner[n] === ci) { labels[n] = label; queue[tail++] = n; } }
+        if (x < W - 1) { const n = idx + 1; if (labels[n] === -1 && previousOwner[n] === ci) { labels[n] = label; queue[tail++] = n; } }
+        if (y > 0) { const n = idx - W; if (labels[n] === -1 && previousOwner[n] === ci) { labels[n] = label; queue[tail++] = n; } }
+        if (y < H - 1) { const n = idx + W; if (labels[n] === -1 && previousOwner[n] === ci) { labels[n] = label; queue[tail++] = n; } }
+      }
+      label++;
+    }
+    return labels;
+  }
+
+  function preserveSplitPieces(previousOwner, previousFills, blocked) {
+    if (!previousOwner || previousOwner.length !== W * H) return 0;
+
+    const oldComponent = buildOldOwnerComponents(previousOwner);
+    const visited = new Uint8Array(W * H);
+    const queue = new Int32Array(W * H);
+    const visibleFills = previousFills.map((fill, index) => ({ fill, index })).filter(({ fill }) => yearVisible(fill));
+    const additions = [];
+
+    for (let start = 0; start < previousOwner.length; start++) {
+      const ci = previousOwner[start];
+      if (ci < 0 || blocked[start] || visited[start]) continue;
+
+      let head = 0, tail = 0, sx = 0, sy = 0;
+      queue[tail++] = start;
+      visited[start] = 1;
+      const countryId = state.countries[ci]?.id;
+      if (!countryId) continue;
+      const oldLabel = oldComponent[start];
+
+      while (head < tail) {
+        const idx = queue[head++], x = idx % W, y = (idx / W) | 0;
+        sx += x; sy += y;
+        if (x > 0) { const n = idx - 1; if (!visited[n] && !blocked[n] && previousOwner[n] === ci) { visited[n] = 1; queue[tail++] = n; } }
+        if (x < W - 1) { const n = idx + 1; if (!visited[n] && !blocked[n] && previousOwner[n] === ci) { visited[n] = 1; queue[tail++] = n; } }
+        if (y > 0) { const n = idx - W; if (!visited[n] && !blocked[n] && previousOwner[n] === ci) { visited[n] = 1; queue[tail++] = n; } }
+        if (y < H - 1) { const n = idx + W; if (!visited[n] && !blocked[n] && previousOwner[n] === ci) { visited[n] = 1; queue[tail++] = n; } }
+      }
+
+      let hasSeed = false;
+      for (const { fill } of visibleFills) {
+        if (fill.countryId !== countryId) continue;
+        const fx = Math.round(fill.x), fy = Math.round(fill.y);
+        if (fx < 0 || fy < 0 || fx >= W || fy >= H) continue;
+        const idx = fy * W + fx;
+        if (!blocked[idx] && previousOwner[idx] === ci) {
+          for (let q = 0; q < tail; q++) {
+            if (queue[q] === idx) { hasSeed = true; break; }
+          }
+        }
+        if (hasSeed) break;
+      }
+      if (hasSeed) continue;
+
+      const meanX = sx / tail, meanY = sy / tail;
+      let seedIdx = start, bestDist = Infinity;
+      const step = Math.max(1, Math.floor(tail / 900));
+      for (let q = 0; q < tail; q += step) {
+        const idx = queue[q], x = idx % W, y = (idx / W) | 0;
+        const d = (x - meanX) * (x - meanX) + (y - meanY) * (y - meanY);
+        if (d < bestDist) { bestDist = d; seedIdx = idx; }
+      }
+
+      let sourceIndex = -1;
+      for (const { fill, index } of visibleFills) {
+        if (fill.countryId !== countryId) continue;
+        const fx = Math.round(fill.x), fy = Math.round(fill.y);
+        if (fx < 0 || fy < 0 || fx >= W || fy >= H) continue;
+        const idx = fy * W + fx;
+        if (previousOwner[idx] === ci && oldComponent[idx] === oldLabel) sourceIndex = Math.max(sourceIndex, index);
+      }
+      if (sourceIndex < 0) {
+        for (const { fill, index } of visibleFills) if (fill.countryId === countryId) sourceIndex = Math.max(sourceIndex, index);
+      }
+      if (sourceIndex < 0) continue;
+
+      additions.push({
+        sourceIndex,
+        fill: {
+          id: uid(),
+          countryId,
+          x: seedIdx % W,
+          y: (seedIdx / W) | 0,
+          fromYear: state.year,
+          toYear: 9999,
+          autoSplit: true
+        }
+      });
+    }
+
+    if (!additions.length) return 0;
+    additions.sort((a, b) => b.sourceIndex - a.sourceIndex);
+    for (const addition of additions) state.fills.splice(addition.sourceIndex + 1, 0, addition.fill);
+    return additions.length;
   }
 
   function commitAdjustment() {
@@ -189,7 +277,6 @@
     const low = forward ? target.start : target.end;
     const high = forward ? target.end : target.start;
     const replacementRaw = forward ? stroke : [...stroke].reverse();
-
     const replacement = [
       [+low.x.toFixed(2), +low.y.toFixed(2)],
       ...replacementRaw.slice(1, -1).map(p => [+p[0].toFixed(2), +p[1].toFixed(2)]),
@@ -207,20 +294,22 @@
     if (cleaned.length < 2) return false;
 
     const previousOwner = window.historyMapTerritoryRender?.getOwnerMap?.()?.slice?.() || null;
+    const previousFills = state.fills.map(fill => ({ ...fill }));
     snapshot();
     const oldBorder = state.borders[target.arrayIndex];
     state.borders[target.arrayIndex] = { ...target.border, points: cleaned };
 
-    // Validate topology BEFORE touching territory caches or fills. If the new
-    // line accidentally connects two previously separate countries, restore the
-    // old border immediately instead of allowing one fill to consume the other.
-    if (mergedCountriesAfterEdit(previousOwner)) {
+    const blocked = buildBarrierMap();
+    const openComponents = buildOpenComponents(blocked);
+    if (mergedCountriesAfterEdit(previousOwner, openComponents)) {
       state.borders[target.arrayIndex] = oldBorder;
       state.history.pop();
       renderBorders();
       flash('새 국경에 틈이 생겨 두 나라 영토가 연결될 수 있어 조정을 취소했습니다.', 2200);
       return false;
     }
+
+    preserveSplitPieces(previousOwner, previousFills, blocked);
 
     window.historyMapTerritoryRender?.invalidate?.();
     window.historyMapGeography?.invalidateOwnership?.();
