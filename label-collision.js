@@ -17,8 +17,23 @@
   let timer = 0;
   let running = false;
 
-  function isVisible(el) {
+  function mapNamesEnabled() {
+    const toggle = document.getElementById('showNames');
+    return toggle?.checked !== false && !document.body.classList.contains('hide-map-names');
+  }
+
+  function isMapName(el) {
+    return el.classList.contains('map-name') ||
+      el.classList.contains('reference-city-label') ||
+      el.classList.contains('reference-river-label') ||
+      el.classList.contains('reference-mountain-label');
+  }
+
+  function isVisible(el, namesEnabled = mapNamesEnabled()) {
     if (!el || !el.isConnected) return false;
+    // When the master place-name switch is off, exclude place names before any
+    // measurement/collision work. They must not move or hide country labels.
+    if (!namesEnabled && isMapName(el) && !el.classList.contains('country-label')) return false;
     const style = getComputedStyle(el);
     return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) !== 0;
   }
@@ -47,17 +62,10 @@
   const OFFSETS = offsets();
 
   function rectMoved(base, dx, dy) {
-    return {
-      left: base.left + dx - PADDING,
-      right: base.right + dx + PADDING,
-      top: base.top + dy - PADDING,
-      bottom: base.bottom + dy + PADDING
-    };
+    return { left: base.left + dx - PADDING, right: base.right + dx + PADDING, top: base.top + dy - PADDING, bottom: base.bottom + dy + PADDING };
   }
 
-  function overlaps(a, b) {
-    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-  }
+  function overlaps(a, b) { return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top; }
 
   function cellsFor(rect) {
     const x0 = Math.floor(rect.left / GRID), x1 = Math.floor(rect.right / GRID);
@@ -102,12 +110,11 @@
     if (running) return;
     running = true;
     try {
-      const labels = Array.from(new Set(document.querySelectorAll(LABEL_SELECTOR)))
-        .filter(isVisible)
-        .sort((a, b) => priority(a) - priority(b));
-
-      // Batch all writes first, then all reads. This avoids repeated forced layout.
-      for (const label of labels) clearCollisionState(label);
+      const allLabels = Array.from(new Set(document.querySelectorAll(LABEL_SELECTOR)));
+      // Clear old collision state even for labels that have just been disabled.
+      for (const label of allLabels) clearCollisionState(label);
+      const namesEnabled = mapNamesEnabled();
+      const labels = allLabels.filter(label => isVisible(label, namesEnabled)).sort((a, b) => priority(a) - priority(b));
       const measurements = labels.map(label => ({ label, rect: label.getBoundingClientRect() }));
       const grid = new Map();
 
@@ -116,55 +123,34 @@
         let chosen = null;
         for (const [dx, dy] of OFFSETS) {
           const candidate = rectMoved(rect, dx, dy);
-          if (!collides(candidate, grid)) {
-            chosen = { dx, dy, rect: candidate };
-            break;
-          }
+          if (!collides(candidate, grid)) { chosen = { dx, dy, rect: candidate }; break; }
         }
-
         if (!chosen) {
           label.style.visibility = 'hidden';
           label.dataset.collisionHidden = '1';
           continue;
         }
-
         if (chosen.dx || chosen.dy) label.style.translate = `${chosen.dx}px ${chosen.dy}px`;
         addToGrid(chosen.rect, grid);
       }
-    } finally {
-      running = false;
-    }
+    } finally { running = false; }
   }
 
-  function schedule(delay = IDLE_DELAY) {
-    clearTimeout(timer);
-    timer = setTimeout(run, delay);
-  }
+  function schedule(delay = IDLE_DELAY) { clearTimeout(timer); timer = setTimeout(run, delay); }
 
   const observer = new MutationObserver(mutations => {
     if (running) return;
     for (const mutation of mutations) {
-      if (mutation.type === 'childList' || mutation.type === 'characterData') {
-        schedule();
-        return;
-      }
-      if (mutation.type === 'attributes' && mutation.target?.matches?.(LABEL_SELECTOR)) {
-        schedule();
-        return;
-      }
+      if (mutation.type === 'childList' || mutation.type === 'characterData') { schedule(); return; }
+      if (mutation.type === 'attributes' && mutation.target?.matches?.(LABEL_SELECTOR)) { schedule(); return; }
     }
   });
 
   observer.observe(document.getElementById('worldMap') || document.body, {
-    subtree: true,
-    childList: true,
-    characterData: true,
-    attributes: true,
+    subtree: true, childList: true, characterData: true, attributes: true,
     attributeFilter: ['x', 'y', 'class', 'display', 'visibility']
   });
 
-  // Zoom/pan only transform the whole viewport uniformly, so relative label
-  // overlap does not change. Do not recalculate collision layout while moving.
   window.addEventListener('resize', () => schedule(120), { passive: true });
   document.getElementById('showNames')?.addEventListener('change', () => schedule(0));
   document.getElementById('showCountryNames')?.addEventListener('change', () => schedule(0));
