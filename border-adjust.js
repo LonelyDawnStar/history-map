@@ -10,6 +10,13 @@
   const sampleGap = () => screenToMap(1.2);
   const snapRadius = () => screenToMap(Number(window.historyMapToolSettings?.borderAdjustRadius) || 20);
 
+  function flash(text, ms = 1800) {
+    statusEl.style.opacity = '1';
+    statusEl.textContent = text;
+    clearTimeout(flash.timer);
+    flash.timer = setTimeout(() => statusEl.style.opacity = '0', ms);
+  }
+
   function nearLand(x, y) {
     if (isLand(x, y)) return true;
     const r = screenToMap(2.4);
@@ -61,9 +68,7 @@
     let best = null;
     for (let i = 0; i < points.length - 1; i++) {
       const projected = projectToSegment(points[i], points[i + 1], target);
-      if (!best || projected.distance < best.distance) {
-        best = { segmentIndex: i, ...projected };
-      }
+      if (!best || projected.distance < best.distance) best = { segmentIndex: i, ...projected };
     }
     return best;
   }
@@ -106,9 +111,6 @@
 
       const oldLength = pathLengthBetween(border.points, a, b);
       const ratio = oldLength / newLength;
-      // A local adjustment should replace a similarly sized local section. This
-      // guard prevents nearby folds/branches of one long border from causing a
-      // huge unrelated section to be deleted.
       if (ratio > 3.25 || ratio < 0.22) continue;
 
       const lengthPenalty = Math.abs(Math.log(Math.max(0.05, ratio))) * radius * 0.8;
@@ -118,12 +120,65 @@
     return best;
   }
 
+  // Build connected-component IDs for the NEW barrier only once. We then check
+  // where each country's OLD pixels ended up. If two different countries now
+  // have the same dominant connected component, the adjusted border has opened
+  // a leak and flood-fill would let one country overwrite the other.
+  function mergedCountriesAfterEdit(previousOwner) {
+    if (!previousOwner || previousOwner.length !== W * H) return false;
+    const blocked = buildBarrierMap();
+    const component = new Int32Array(W * H);
+    component.fill(-1);
+    const queue = new Int32Array(W * H);
+    let componentId = 0;
+
+    for (let start = 0; start < component.length; start++) {
+      if (blocked[start] || component[start] !== -1) continue;
+      let head = 0, tail = 0;
+      queue[tail++] = start;
+      component[start] = componentId;
+      while (head < tail) {
+        const idx = queue[head++];
+        const x = idx % W, y = (idx / W) | 0;
+        if (x > 0) { const n = idx - 1; if (!blocked[n] && component[n] === -1) { component[n] = componentId; queue[tail++] = n; } }
+        if (x < W - 1) { const n = idx + 1; if (!blocked[n] && component[n] === -1) { component[n] = componentId; queue[tail++] = n; } }
+        if (y > 0) { const n = idx - W; if (!blocked[n] && component[n] === -1) { component[n] = componentId; queue[tail++] = n; } }
+        if (y < H - 1) { const n = idx + W; if (!blocked[n] && component[n] === -1) { component[n] = componentId; queue[tail++] = n; } }
+      }
+      componentId++;
+    }
+
+    const counts = state.countries.map(() => new Map());
+    const totals = new Int32Array(state.countries.length);
+    for (let idx = 0; idx < previousOwner.length; idx++) {
+      const ci = previousOwner[idx];
+      const comp = component[idx];
+      if (ci < 0 || comp < 0 || ci >= counts.length) continue;
+      totals[ci]++;
+      counts[ci].set(comp, (counts[ci].get(comp) || 0) + 1);
+    }
+
+    const dominant = new Map();
+    for (let ci = 0; ci < counts.length; ci++) {
+      if (totals[ci] < 80) continue;
+      let bestComp = -1, bestCount = 0;
+      for (const [comp, count] of counts[ci]) {
+        if (count > bestCount) { bestCount = count; bestComp = comp; }
+      }
+      if (bestComp < 0) continue;
+      // Ignore tiny remnants produced by coastline/border rasterization.
+      if (bestCount < Math.max(60, totals[ci] * 0.12)) continue;
+      const other = dominant.get(bestComp);
+      if (other !== undefined && other !== ci) return true;
+      dominant.set(bestComp, ci);
+    }
+    return false;
+  }
+
   function commitAdjustment() {
     const target = findTargetBorder();
     if (!target) {
-      statusEl.style.opacity = '1';
-      statusEl.textContent = '조정할 구간의 시작과 끝을 같은 기존 국경에 가깝게 연결해 주세요.';
-      setTimeout(() => statusEl.style.opacity = '0', 1800);
+      flash('조정할 구간의 시작과 끝을 같은 기존 국경에 가깝게 연결해 주세요.');
       return false;
     }
 
@@ -133,20 +188,17 @@
     const forward = startPos <= endPos;
     const low = forward ? target.start : target.end;
     const high = forward ? target.end : target.start;
-
     const replacementRaw = forward ? stroke : [...stroke].reverse();
+
     const replacement = [
       [+low.x.toFixed(2), +low.y.toFixed(2)],
       ...replacementRaw.slice(1, -1).map(p => [+p[0].toFixed(2), +p[1].toFixed(2)]),
       [+high.x.toFixed(2), +high.y.toFixed(2)]
     ];
-
     const before = points.slice(0, low.segmentIndex + 1).map(p => [p[0], p[1]]);
     const after = points.slice(high.segmentIndex + 1).map(p => [p[0], p[1]]);
     const merged = [...before, ...replacement, ...after];
 
-    // Remove duplicate consecutive points, which can create tiny raster gaps or
-    // spikes in the barrier after repeated adjustments.
     const cleaned = [];
     for (const p of merged) {
       const last = cleaned.at(-1);
@@ -154,12 +206,23 @@
     }
     if (cleaned.length < 2) return false;
 
-    // Capture ownership BEFORE changing the barrier. Territory-render uses this
-    // map as the preservation source if the border edit creates multiple pieces.
-    window.historyMapTerritoryRender?.getOwnerMap?.();
+    const previousOwner = window.historyMapTerritoryRender?.getOwnerMap?.()?.slice?.() || null;
     snapshot();
-    window.historyMapTerritoryRender?.invalidate?.();
+    const oldBorder = state.borders[target.arrayIndex];
     state.borders[target.arrayIndex] = { ...target.border, points: cleaned };
+
+    // Validate topology BEFORE touching territory caches or fills. If the new
+    // line accidentally connects two previously separate countries, restore the
+    // old border immediately instead of allowing one fill to consume the other.
+    if (mergedCountriesAfterEdit(previousOwner)) {
+      state.borders[target.arrayIndex] = oldBorder;
+      state.history.pop();
+      renderBorders();
+      flash('새 국경에 틈이 생겨 두 나라 영토가 연결될 수 있어 조정을 취소했습니다.', 2200);
+      return false;
+    }
+
+    window.historyMapTerritoryRender?.invalidate?.();
     window.historyMapGeography?.invalidateOwnership?.();
     renderBorders();
     renderTerritories();
