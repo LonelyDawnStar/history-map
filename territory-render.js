@@ -2,6 +2,7 @@
   let cacheKey = '';
   let cachedOwner = null;
   let cachedCentroids = null;
+  let cachedComponents = null;
 
   function borderHash() {
     let hash = 2166136261 >>> 0;
@@ -30,10 +31,83 @@
     return `${state.year};${state.countries.map(c => c.id).join(',')};${fills};${borderHash()}`;
   }
 
+  function componentAnchor(indices, meanX, meanY) {
+    let bestIdx = indices[0];
+    let bestDist = Infinity;
+    for (let i = 0; i < indices.length; i += Math.max(1, Math.floor(indices.length / 1400))) {
+      const idx = indices[i];
+      const x = idx % W;
+      const y = (idx / W) | 0;
+      const dist = (x - meanX) * (x - meanX) + (y - meanY) * (y - meanY);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = idx;
+      }
+    }
+    return { x: bestIdx % W, y: (bestIdx / W) | 0 };
+  }
+
+  function buildComponents(owner) {
+    const visited = new Uint8Array(W * H);
+    const byCountry = new Map();
+    const queue = new Int32Array(W * H);
+
+    for (let start = 0; start < owner.length; start++) {
+      const ci = owner[start];
+      if (ci < 0 || visited[start]) continue;
+
+      let head = 0, tail = 0;
+      let sx = 0, sy = 0;
+      const pixels = [];
+      queue[tail++] = start;
+      visited[start] = 1;
+
+      while (head < tail) {
+        const idx = queue[head++];
+        pixels.push(idx);
+        const x = idx % W;
+        const y = (idx / W) | 0;
+        sx += x; sy += y;
+
+        if (x > 0) {
+          const n = idx - 1;
+          if (!visited[n] && owner[n] === ci) { visited[n] = 1; queue[tail++] = n; }
+        }
+        if (x < W - 1) {
+          const n = idx + 1;
+          if (!visited[n] && owner[n] === ci) { visited[n] = 1; queue[tail++] = n; }
+        }
+        if (y > 0) {
+          const n = idx - W;
+          if (!visited[n] && owner[n] === ci) { visited[n] = 1; queue[tail++] = n; }
+        }
+        if (y < H - 1) {
+          const n = idx + W;
+          if (!visited[n] && owner[n] === ci) { visited[n] = 1; queue[tail++] = n; }
+        }
+      }
+
+      const count = pixels.length;
+      const meanX = sx / count;
+      const meanY = sy / count;
+      const anchor = componentAnchor(pixels, meanX, meanY);
+      const countryId = state.countries[ci]?.id;
+      if (!countryId) continue;
+      if (!byCountry.has(countryId)) byCountry.set(countryId, []);
+      byCountry.get(countryId).push({ x: anchor.x, y: anchor.y, count });
+    }
+
+    for (const components of byCountry.values()) {
+      components.sort((a, b) => b.count - a.count);
+      components.forEach((component, index) => { component.rank = index; });
+    }
+    return byCountry;
+  }
+
   function buildOwner() {
     const key = ownershipKey();
-    if (key === cacheKey && cachedOwner && cachedCentroids) {
-      return { owner: cachedOwner, centroids: cachedCentroids };
+    if (key === cacheKey && cachedOwner && cachedCentroids && cachedComponents) {
+      return { owner: cachedOwner, centroids: cachedCentroids, components: cachedComponents };
     }
 
     const blocked = buildBarrierMap();
@@ -69,10 +143,12 @@
       });
     });
 
+    const components = buildComponents(owner);
     cacheKey = key;
     cachedOwner = owner;
     cachedCentroids = centroids;
-    return { owner, centroids };
+    cachedComponents = components;
+    return { owner, centroids, components };
   }
 
   function alphaFor(country) {
@@ -81,13 +157,20 @@
     return Math.round(normalized * 255);
   }
 
+  function visibleComponents(country, components) {
+    if (!components?.length) return [];
+    const largest = components[0].count;
+    const minArea = Math.max(120, Math.round(largest * 0.015));
+    return components.filter((component, index) => index === 0 || component.count >= minArea);
+  }
+
   function renderTerritoriesCached() {
     territoryLayer.selectAll('*').remove();
     labelLayer.selectAll('*').remove();
     if (!landMask) return;
     if (!state.fills.some(yearVisible)) return;
 
-    const { owner, centroids } = buildOwner();
+    const { owner, components } = buildOwner();
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext('2d');
@@ -112,26 +195,40 @@
       .attr('class', 'territory-raster');
 
     for (const country of state.countries) {
-      const centroid = centroids.get(country.id);
-      if (!centroid) continue;
-      const hasCustom = Number.isFinite(Number(country.labelX)) && Number.isFinite(Number(country.labelY));
-      const x = hasCustom ? Number(country.labelX) : centroid.x;
-      const y = hasCustom ? Number(country.labelY) : centroid.y;
-      labelLayer.append('text')
-        .attr('class', 'country-label')
-        .attr('data-country-id', country.id)
-        .attr('data-auto-x', centroid.x)
-        .attr('data-auto-y', centroid.y)
-        .attr('x', x).attr('y', y)
-        .text(country.name);
+      const parts = visibleComponents(country, components.get(country.id));
+      if (!parts.length) continue;
+
+      for (const part of parts) {
+        const key = String(part.rank);
+        const saved = country.labelPositions?.[key];
+        const legacyCustom = part.rank === 0 && Number.isFinite(Number(country.labelX)) && Number.isFinite(Number(country.labelY));
+        const x = saved && Number.isFinite(Number(saved.x)) ? Number(saved.x) : (legacyCustom ? Number(country.labelX) : part.x);
+        const y = saved && Number.isFinite(Number(saved.y)) ? Number(saved.y) : (legacyCustom ? Number(country.labelY) : part.y);
+
+        labelLayer.append('text')
+          .attr('class', 'country-label')
+          .attr('data-country-id', country.id)
+          .attr('data-component-key', key)
+          .attr('data-auto-x', part.x)
+          .attr('data-auto-y', part.y)
+          .attr('x', x).attr('y', y)
+          .style('fill', country.color || '#202020')
+          .text(country.name);
+      }
     }
   }
 
   renderTerritories = renderTerritoriesCached;
 
   window.historyMapTerritoryRender = {
-    invalidate() { cacheKey = ''; cachedOwner = null; cachedCentroids = null; },
+    invalidate() {
+      cacheKey = '';
+      cachedOwner = null;
+      cachedCentroids = null;
+      cachedComponents = null;
+    },
     getCentroid(countryId) { return buildOwner().centroids.get(countryId) || null; },
+    getComponents(countryId) { return buildOwner().components.get(countryId) || []; },
     render: renderTerritoriesCached
   };
 })();
