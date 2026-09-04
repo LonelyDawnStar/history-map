@@ -9,9 +9,12 @@
   ].join(',');
 
   const PADDING = 4;
-  const STEP = 10;
-  const MAX_RADIUS = 220;
-  let frame = 0;
+  const STEP = 12;
+  const MAX_RADIUS = 216;
+  const GRID = 96;
+  const IDLE_DELAY = 90;
+
+  let timer = 0;
   let running = false;
 
   function isVisible(el) {
@@ -30,28 +33,10 @@
     return 6;
   }
 
-  function paddedRect(rect) {
-    return {
-      left: rect.left - PADDING,
-      right: rect.right + PADDING,
-      top: rect.top - PADDING,
-      bottom: rect.bottom + PADDING
-    };
-  }
-
-  function overlaps(a, b) {
-    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-  }
-
-  function collides(rect, placed) {
-    for (let i = 0; i < placed.length; i++) if (overlaps(rect, placed[i])) return true;
-    return false;
-  }
-
-  function candidateOffsets() {
+  function offsets() {
     const out = [[0, 0]];
     for (let r = STEP; r <= MAX_RADIUS; r += STEP) {
-      const n = Math.max(8, Math.round((2 * Math.PI * r) / STEP));
+      const n = Math.max(8, Math.ceil((Math.PI * 2 * r) / 24));
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2;
         out.push([Math.round(Math.cos(a) * r), Math.round(Math.sin(a) * r)]);
@@ -59,57 +44,101 @@
     }
     return out;
   }
+  const OFFSETS = offsets();
 
-  const OFFSETS = candidateOffsets();
+  function rectMoved(base, dx, dy) {
+    return {
+      left: base.left + dx - PADDING,
+      right: base.right + dx + PADDING,
+      top: base.top + dy - PADDING,
+      bottom: base.bottom + dy + PADDING
+    };
+  }
 
-  function resetLabel(el) {
+  function overlaps(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
+
+  function cellsFor(rect) {
+    const x0 = Math.floor(rect.left / GRID), x1 = Math.floor(rect.right / GRID);
+    const y0 = Math.floor(rect.top / GRID), y1 = Math.floor(rect.bottom / GRID);
+    const keys = [];
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) keys.push(`${x}:${y}`);
+    return keys;
+  }
+
+  function collides(rect, grid) {
+    const checked = new Set();
+    for (const key of cellsFor(rect)) {
+      const bucket = grid.get(key);
+      if (!bucket) continue;
+      for (const placed of bucket) {
+        if (checked.has(placed)) continue;
+        checked.add(placed);
+        if (overlaps(rect, placed)) return true;
+      }
+    }
+    return false;
+  }
+
+  function addToGrid(rect, grid) {
+    for (const key of cellsFor(rect)) {
+      let bucket = grid.get(key);
+      if (!bucket) grid.set(key, bucket = []);
+      bucket.push(rect);
+    }
+  }
+
+  function clearCollisionState(el) {
     el.style.translate = '';
-    el.style.removeProperty('--collision-hidden');
     if (el.dataset.collisionHidden === '1') {
       el.style.visibility = '';
       delete el.dataset.collisionHidden;
     }
   }
 
-  function placeLabel(el, placed) {
-    resetLabel(el);
-    if (!isVisible(el)) return;
-
-    for (const [dx, dy] of OFFSETS) {
-      el.style.translate = dx || dy ? `${dx}px ${dy}px` : '';
-      const rect = paddedRect(el.getBoundingClientRect());
-      if (rect.width <= 0 || rect.height <= 0) return;
-      if (!collides(rect, placed)) {
-        placed.push(rect);
-        return;
-      }
-    }
-
-    // If the map is too dense to fit everything even after searching a wide
-    // radius, hide the lowest-priority label rather than allowing overlap.
-    el.style.translate = '';
-    el.style.visibility = 'hidden';
-    el.dataset.collisionHidden = '1';
-  }
-
   function run() {
-    frame = 0;
+    timer = 0;
     if (running) return;
     running = true;
     try {
       const labels = Array.from(new Set(document.querySelectorAll(LABEL_SELECTOR)))
         .filter(isVisible)
         .sort((a, b) => priority(a) - priority(b));
-      const placed = [];
-      for (const label of labels) placeLabel(label, placed);
+
+      // Batch all writes first, then all reads. This avoids repeated forced layout.
+      for (const label of labels) clearCollisionState(label);
+      const measurements = labels.map(label => ({ label, rect: label.getBoundingClientRect() }));
+      const grid = new Map();
+
+      for (const { label, rect } of measurements) {
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        let chosen = null;
+        for (const [dx, dy] of OFFSETS) {
+          const candidate = rectMoved(rect, dx, dy);
+          if (!collides(candidate, grid)) {
+            chosen = { dx, dy, rect: candidate };
+            break;
+          }
+        }
+
+        if (!chosen) {
+          label.style.visibility = 'hidden';
+          label.dataset.collisionHidden = '1';
+          continue;
+        }
+
+        if (chosen.dx || chosen.dy) label.style.translate = `${chosen.dx}px ${chosen.dy}px`;
+        addToGrid(chosen.rect, grid);
+      }
     } finally {
       running = false;
     }
   }
 
-  function schedule() {
-    if (frame) return;
-    frame = requestAnimationFrame(run);
+  function schedule(delay = IDLE_DELAY) {
+    clearTimeout(timer);
+    timer = setTimeout(run, delay);
   }
 
   const observer = new MutationObserver(mutations => {
@@ -119,12 +148,9 @@
         schedule();
         return;
       }
-      if (mutation.type === 'attributes') {
-        const target = mutation.target;
-        if (target?.matches?.(LABEL_SELECTOR) || target?.id === 'viewport' || target?.closest?.('#viewport')) {
-          schedule();
-          return;
-        }
+      if (mutation.type === 'attributes' && mutation.target?.matches?.(LABEL_SELECTOR)) {
+        schedule();
+        return;
       }
     }
   });
@@ -134,16 +160,18 @@
     childList: true,
     characterData: true,
     attributes: true,
-    attributeFilter: ['x', 'y', 'transform', 'class', 'display', 'visibility']
+    attributeFilter: ['x', 'y', 'class', 'display', 'visibility']
   });
 
-  window.addEventListener('resize', schedule, { passive: true });
-  document.getElementById('showNames')?.addEventListener('change', schedule);
-  document.getElementById('showCountryNames')?.addEventListener('change', schedule);
-  document.getElementById('showCities')?.addEventListener('change', schedule);
-  document.getElementById('showRivers')?.addEventListener('change', schedule);
-  document.getElementById('showMountains')?.addEventListener('change', schedule);
+  // Zoom/pan only transform the whole viewport uniformly, so relative label
+  // overlap does not change. Do not recalculate collision layout while moving.
+  window.addEventListener('resize', () => schedule(120), { passive: true });
+  document.getElementById('showNames')?.addEventListener('change', () => schedule(0));
+  document.getElementById('showCountryNames')?.addEventListener('change', () => schedule(0));
+  document.getElementById('showCities')?.addEventListener('change', () => schedule(0));
+  document.getElementById('showRivers')?.addEventListener('change', () => schedule(0));
+  document.getElementById('showMountains')?.addEventListener('change', () => schedule(0));
 
   window.historyMapLabelCollision = { schedule, run };
-  schedule();
+  schedule(0);
 })();
