@@ -3,6 +3,8 @@
   let cachedOwner = null;
   let cachedCentroids = null;
   let cachedComponents = null;
+  let cachedRasterKey = '';
+  let cachedRasterHref = '';
 
   function borderHash() {
     let hash = 2166136261 >>> 0;
@@ -34,7 +36,8 @@
   function componentAnchor(indices, meanX, meanY) {
     let bestIdx = indices[0];
     let bestDist = Infinity;
-    for (let i = 0; i < indices.length; i += Math.max(1, Math.floor(indices.length / 1400))) {
+    const step = Math.max(1, Math.floor(indices.length / 1400));
+    for (let i = 0; i < indices.length; i += step) {
       const idx = indices[i];
       const x = idx % W;
       const y = (idx / W) | 0;
@@ -55,9 +58,7 @@
     for (let start = 0; start < owner.length; start++) {
       const ci = owner[start];
       if (ci < 0 || visited[start]) continue;
-
-      let head = 0, tail = 0;
-      let sx = 0, sy = 0;
+      let head = 0, tail = 0, sx = 0, sy = 0;
       const pixels = [];
       queue[tail++] = start;
       visited[start] = 1;
@@ -68,23 +69,10 @@
         const x = idx % W;
         const y = (idx / W) | 0;
         sx += x; sy += y;
-
-        if (x > 0) {
-          const n = idx - 1;
-          if (!visited[n] && owner[n] === ci) { visited[n] = 1; queue[tail++] = n; }
-        }
-        if (x < W - 1) {
-          const n = idx + 1;
-          if (!visited[n] && owner[n] === ci) { visited[n] = 1; queue[tail++] = n; }
-        }
-        if (y > 0) {
-          const n = idx - W;
-          if (!visited[n] && owner[n] === ci) { visited[n] = 1; queue[tail++] = n; }
-        }
-        if (y < H - 1) {
-          const n = idx + W;
-          if (!visited[n] && owner[n] === ci) { visited[n] = 1; queue[tail++] = n; }
-        }
+        if (x > 0) { const n = idx - 1; if (!visited[n] && owner[n] === ci) { visited[n] = 1; queue[tail++] = n; } }
+        if (x < W - 1) { const n = idx + 1; if (!visited[n] && owner[n] === ci) { visited[n] = 1; queue[tail++] = n; } }
+        if (y > 0) { const n = idx - W; if (!visited[n] && owner[n] === ci) { visited[n] = 1; queue[tail++] = n; } }
+        if (y < H - 1) { const n = idx + W; if (!visited[n] && owner[n] === ci) { visited[n] = 1; queue[tail++] = n; } }
       }
 
       const count = pixels.length;
@@ -136,11 +124,7 @@
     const centroids = new Map();
     sums.forEach((sum, ci) => {
       if (!sum.count) return;
-      centroids.set(state.countries[ci].id, {
-        x: sum.x / sum.count,
-        y: sum.y / sum.count,
-        count: sum.count
-      });
+      centroids.set(state.countries[ci].id, { x: sum.x / sum.count, y: sum.y / sum.count, count: sum.count });
     });
 
     const components = buildComponents(owner);
@@ -164,15 +148,17 @@
     return components.filter((component, index) => index === 0 || component.count >= minArea);
   }
 
-  function renderTerritoriesCached() {
-    territoryLayer.selectAll('*').remove();
-    labelLayer.selectAll('*').remove();
-    if (!landMask) return;
-    if (!state.fills.some(yearVisible)) return;
+  function rasterKey() {
+    return `${cacheKey};${state.countries.map(c => `${c.id}:${c.color}:${alphaFor(c)}`).join('|')}`;
+  }
 
-    const { owner, components } = buildOwner();
+  function buildRaster(owner) {
+    const key = rasterKey();
+    if (key === cachedRasterKey && cachedRasterHref) return cachedRasterHref;
+
     const canvas = document.createElement('canvas');
-    canvas.width = W; canvas.height = H;
+    canvas.width = W;
+    canvas.height = H;
     const ctx = canvas.getContext('2d');
     const img = ctx.createImageData(W, H);
     const colors = state.countries.map(country => ({ ...hexToRgb(country.color), a: alphaFor(country) }));
@@ -189,15 +175,25 @@
     }
 
     ctx.putImageData(img, 0, 0);
+    cachedRasterHref = canvas.toDataURL();
+    cachedRasterKey = key;
+    return cachedRasterHref;
+  }
+
+  function renderTerritoriesCached() {
+    territoryLayer.selectAll('*').remove();
+    labelLayer.selectAll('*').remove();
+    if (!landMask || !state.fills.some(yearVisible)) return;
+
+    const { owner, components } = buildOwner();
     territoryLayer.append('image')
-      .attr('href', canvas.toDataURL())
+      .attr('href', buildRaster(owner))
       .attr('x', 0).attr('y', 0).attr('width', W).attr('height', H)
       .attr('class', 'territory-raster');
 
     for (const country of state.countries) {
       const parts = visibleComponents(country, components.get(country.id));
       if (!parts.length) continue;
-
       for (const part of parts) {
         const key = String(part.rank);
         const saved = country.labelPositions?.[key];
@@ -226,9 +222,12 @@
       cachedOwner = null;
       cachedCentroids = null;
       cachedComponents = null;
+      cachedRasterKey = '';
+      cachedRasterHref = '';
     },
     getCentroid(countryId) { return buildOwner().centroids.get(countryId) || null; },
     getComponents(countryId) { return buildOwner().components.get(countryId) || []; },
+    getOwnerMap() { return buildOwner().owner; },
     render: renderTerritoriesCached
   };
 })();
