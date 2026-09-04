@@ -3,6 +3,11 @@
   let cachedOwner = null;
   let cachedCentroids = null;
   let cachedComponents = null;
+  let cachedBorderHash = 0;
+  let cachedFillSignature = '';
+  let carryOwner = null;
+  let carryBorderHash = 0;
+  let carryFillSignature = '';
 
   function borderHash() {
     let hash = 2166136261 >>> 0;
@@ -24,17 +29,21 @@
     return hash >>> 0;
   }
 
-  function ownershipKey() {
-    const fills = state.fills.filter(yearVisible)
+  function fillSignature() {
+    return `${state.year};${state.countries.map(c => c.id).join(',')};${state.fills.filter(yearVisible)
       .map(f => `${f.id}:${f.countryId}:${f.x}:${f.y}`)
-      .join('|');
-    return `${state.year};${state.countries.map(c => c.id).join(',')};${fills};${borderHash()}`;
+      .join('|')}`;
+  }
+
+  function ownershipKey() {
+    return `${fillSignature()};${borderHash()}`;
   }
 
   function componentAnchor(indices, meanX, meanY) {
     let bestIdx = indices[0];
     let bestDist = Infinity;
-    for (let i = 0; i < indices.length; i += Math.max(1, Math.floor(indices.length / 1400))) {
+    const step = Math.max(1, Math.floor(indices.length / 1400));
+    for (let i = 0; i < indices.length; i += step) {
       const idx = indices[i];
       const x = idx % W;
       const y = (idx / W) | 0;
@@ -104,11 +113,107 @@
     return byCountry;
   }
 
+  function addSplitSeedsFromPrevious(previousOwner, blocked, owner, countryIndex) {
+    if (!previousOwner || previousOwner.length !== owner.length) return 0;
+
+    const visited = new Uint8Array(W * H);
+    const queue = new Int32Array(W * H);
+    const additions = [];
+
+    for (let start = 0; start < previousOwner.length; start++) {
+      const ci = previousOwner[start];
+      if (ci < 0 || visited[start] || blocked[start]) continue;
+      if (owner[start] === ci) {
+        visited[start] = 1;
+        continue;
+      }
+
+      let head = 0, tail = 0;
+      let sx = 0, sy = 0, count = 0;
+      let alreadyOwned = false;
+      queue[tail++] = start;
+      visited[start] = 1;
+
+      while (head < tail) {
+        const idx = queue[head++];
+        if (previousOwner[idx] !== ci || blocked[idx]) continue;
+        const x = idx % W;
+        const y = (idx / W) | 0;
+        sx += x; sy += y; count++;
+        if (owner[idx] === ci) alreadyOwned = true;
+
+        if (x > 0) {
+          const n = idx - 1;
+          if (!visited[n] && previousOwner[n] === ci && !blocked[n]) { visited[n] = 1; queue[tail++] = n; }
+        }
+        if (x < W - 1) {
+          const n = idx + 1;
+          if (!visited[n] && previousOwner[n] === ci && !blocked[n]) { visited[n] = 1; queue[tail++] = n; }
+        }
+        if (y > 0) {
+          const n = idx - W;
+          if (!visited[n] && previousOwner[n] === ci && !blocked[n]) { visited[n] = 1; queue[tail++] = n; }
+        }
+        if (y < H - 1) {
+          const n = idx + W;
+          if (!visited[n] && previousOwner[n] === ci && !blocked[n]) { visited[n] = 1; queue[tail++] = n; }
+        }
+      }
+
+      if (!count || alreadyOwned) continue;
+      const country = state.countries[ci];
+      if (!country || !countryIndex.has(country.id)) continue;
+
+      const mx = Math.round(sx / count);
+      const my = Math.round(sy / count);
+      let seedIdx = start;
+      let best = Infinity;
+      for (let i = 0; i < tail; i += Math.max(1, Math.floor(tail / 900))) {
+        const idx = queue[i];
+        if (previousOwner[idx] !== ci || blocked[idx]) continue;
+        const x = idx % W, y = (idx / W) | 0;
+        const d = (x - mx) * (x - mx) + (y - my) * (y - my);
+        if (d < best) { best = d; seedIdx = idx; }
+      }
+
+      additions.push({
+        id: uid(),
+        countryId: country.id,
+        x: seedIdx % W,
+        y: (seedIdx / W) | 0,
+        fromYear: state.year,
+        toYear: 9999,
+        autoSplit: true
+      });
+    }
+
+    if (!additions.length) return 0;
+
+    for (const fill of additions) {
+      state.fills.push(fill);
+      const ci = countryIndex.get(fill.countryId);
+      const region = floodRegion(fill.x, fill.y, blocked);
+      for (const idx of region) owner[idx] = ci;
+    }
+
+    window.historyMapAutosave?.save?.();
+    return additions.length;
+  }
+
   function buildOwner() {
-    const key = ownershipKey();
+    const currentBorderHash = borderHash();
+    const currentFillSignature = fillSignature();
+    const key = `${currentFillSignature};${currentBorderHash}`;
     if (key === cacheKey && cachedOwner && cachedCentroids && cachedComponents) {
       return { owner: cachedOwner, centroids: cachedCentroids, components: cachedComponents };
     }
+
+    const previousOwner = carryOwner || cachedOwner;
+    const previousBorderHash = carryOwner ? carryBorderHash : cachedBorderHash;
+    const previousFillSignature = carryOwner ? carryFillSignature : cachedFillSignature;
+    carryOwner = null;
+    carryBorderHash = 0;
+    carryFillSignature = '';
 
     const blocked = buildBarrierMap();
     const owner = new Int32Array(W * H);
@@ -121,6 +226,10 @@
       if (ci === undefined) continue;
       const region = floodRegion(fill.x, fill.y, blocked);
       for (const idx of region) owner[idx] = ci;
+    }
+
+    if (previousOwner && previousFillSignature === currentFillSignature && previousBorderHash !== currentBorderHash) {
+      addSplitSeedsFromPrevious(previousOwner, blocked, owner, countryIndex);
     }
 
     const sums = state.countries.map(() => ({ x: 0, y: 0, count: 0 }));
@@ -144,10 +253,12 @@
     });
 
     const components = buildComponents(owner);
-    cacheKey = key;
+    cacheKey = ownershipKey();
     cachedOwner = owner;
     cachedCentroids = centroids;
     cachedComponents = components;
+    cachedBorderHash = currentBorderHash;
+    cachedFillSignature = fillSignature();
     return { owner, centroids, components };
   }
 
@@ -222,6 +333,11 @@
 
   window.historyMapTerritoryRender = {
     invalidate() {
+      if (cachedOwner) {
+        carryOwner = cachedOwner.slice();
+        carryBorderHash = cachedBorderHash;
+        carryFillSignature = cachedFillSignature;
+      }
       cacheKey = '';
       cachedOwner = null;
       cachedCentroids = null;
@@ -229,6 +345,7 @@
     },
     getCentroid(countryId) { return buildOwner().centroids.get(countryId) || null; },
     getComponents(countryId) { return buildOwner().components.get(countryId) || []; },
+    getOwnerMap() { return buildOwner().owner; },
     render: renderTerritoriesCached
   };
 })();
